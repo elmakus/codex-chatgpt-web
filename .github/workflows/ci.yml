@@ -13,10 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [macos-15, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@71cf2267d20c8e4c12fd5cf59a45b3367c2fac58 # v6
       - name: Validate launcher installer with Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell
@@ -32,7 +32,7 @@ jobs:
           if (-not [Environment]::Is64BitOperatingSystem) {
             throw "The Windows CI runner must be 64-bit"
           }
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@d45fa29813ed73b4b203b5ae18fc8bd4ab3c3e05 # v2
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
@@ -68,8 +68,8 @@ jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@71cf2267d20c8e4c12fd5cf59a45b3367c2fac58 # v6
+      - uses: actions/setup-go@c3fb2b9ca92976c0225a8952524a0e76858e3316 # v6
         with:
           go-version: "1.26.x"
           cache: false
