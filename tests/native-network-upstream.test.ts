@@ -31,6 +31,20 @@ test("keeps the official backend and incoming OAuth when no native upstream over
   expect(prepared.headers.get("authorization")).toBe("Bearer chatgpt-oauth");
 });
 
+test("rejects a custom native upstream without a dedicated upstream API key", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  delete process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY;
+  delete process.env.CODEX_LB_API_KEY;
+
+  const request = new Request("https://chatgpt.com/backend-api/codex/models", {
+    headers: { authorization: "Bearer chatgpt-oauth-must-not-leak" },
+  });
+
+  await expect(prepareNativeCodexRequest(request)).rejects.toThrow(
+    "requires CODEX_CHATGPT_WEB_NATIVE_API_KEY or CODEX_LB_API_KEY",
+  );
+});
+
 test("routes native Codex requests to Codex-LB and replaces the ChatGPT OAuth bearer", async () => {
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex/";
   delete process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY;
