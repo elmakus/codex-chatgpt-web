@@ -18,28 +18,49 @@ The client still points only at the local `codex-chatgpt-web` daemon. Native req
 
 ## Configuration
 
-For a local Codex-LB listener on port `2455`:
+Set the Codex-LB/native upstream URL explicitly, for example:
 
 ```bash
 export CODEX_CHATGPT_WEB_NATIVE_UPSTREAM=http://127.0.0.1:2455/backend-api/codex
-export CODEX_LB_API_KEY='your-existing-codex-lb-api-key'
 ```
 
-A custom native upstream always requires a dedicated upstream API key. `CODEX_CHATGPT_WEB_NATIVE_API_KEY` may be used instead of `CODEX_LB_API_KEY` when an explicit per-upstream key is preferred:
+A dedicated Codex-LB/native-upstream API key is required whenever that custom upstream is configured. The preferred persistent form is a file owned by the user running `codex-chatgpt-web`:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/codex-web-gpt/codex-lb-api-key
+```
+
+The packaged Linux launcher ships a helper that writes the key without putting it in shell history:
+
+```bash
+codex-web-gpt-set-codex-lb-key
+```
+
+It prompts twice without echoing the value and stores the file with mode `0600`. To remove the stored key:
+
+```bash
+codex-web-gpt-set-codex-lb-key --clear
+```
+
+`CODEX_LB_API_KEY_FILE` may override the file location. Environment credentials remain supported for standalone deployments:
 
 ```bash
 export CODEX_CHATGPT_WEB_NATIVE_API_KEY='your-native-upstream-api-key'
+# or
+export CODEX_LB_API_KEY='your-codex-lb-api-key'
 ```
 
-When both are set, `CODEX_CHATGPT_WEB_NATIVE_API_KEY` wins. If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is set without either key, the request fails closed before any network request is sent to the custom upstream.
+Resolution order is `CODEX_CHATGPT_WEB_NATIVE_API_KEY`, then `CODEX_LB_API_KEY`, then the configured/default key file. If no usable key exists, the custom native upstream fails closed before any request is sent.
 
-The upstream override applies to all native Codex passthrough endpoints, including model discovery, Responses, compaction, Search, and image endpoints, because those requests share the same native network transport.
+## Model catalog
+
+Model discovery uses the same native transport as Responses, compaction, Search, and image endpoints. When the native upstream points at Codex-LB, the native model rows returned by Codex-LB are kept and the fork appends its `chatgpt-web/*` rows. The resulting Codex model picker therefore exposes the Codex-LB native catalog together with the ChatGPT Web models supplied by this fork.
 
 ## Authentication boundary
 
-Community Edition / Codex Desktop still sends its normal ChatGPT bearer to the local `codex-chatgpt-web` daemon. When a custom native upstream is configured, the network layer requires a dedicated upstream key and replaces `Authorization` before sending the request onward. The original ChatGPT OAuth bearer is therefore never forwarded to the configured custom upstream.
+Community Edition / Codex Desktop still sends its normal ChatGPT bearer to the local `codex-chatgpt-web` daemon. When a custom native upstream is configured, the network layer requires the dedicated upstream key and replaces `Authorization` before sending the request onward. The original ChatGPT OAuth bearer is therefore never forwarded to the configured custom upstream.
 
-If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is not set, behavior remains unchanged: requests go to `https://chatgpt.com/backend-api/codex` with the incoming native Codex authentication. Merely setting `CODEX_LB_API_KEY` does not alter the official route.
+If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is not set, behavior remains unchanged: requests go to `https://chatgpt.com/backend-api/codex` with the incoming native Codex authentication. Merely storing a Codex-LB key does not alter the official route.
 
 ## Transport
 

@@ -1,19 +1,34 @@
 import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { prepareNativeCodexRequest } from "../src/native-network";
 
 const ENV_KEYS = [
   "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM",
   "CODEX_CHATGPT_WEB_NATIVE_API_KEY",
   "CODEX_LB_API_KEY",
+  "CODEX_LB_API_KEY_FILE",
+  "XDG_CONFIG_HOME",
 ] as const;
 
 const originalEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]])) as Record<string, string | undefined>;
+const tempRoots: string[] = [];
+
+function tempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "codex-chatgpt-web-native-upstream-"));
+  tempRoots.push(root);
+  return root;
+}
 
 afterEach(() => {
   for (const key of ENV_KEYS) {
     const value = originalEnv[key];
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
+  }
+  while (tempRoots.length > 0) {
+    rmSync(tempRoots.pop()!, { recursive: true, force: true });
   }
 });
 
@@ -35,14 +50,36 @@ test("rejects a custom native upstream without a dedicated upstream API key", as
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
   delete process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY;
   delete process.env.CODEX_LB_API_KEY;
+  process.env.CODEX_LB_API_KEY_FILE = join(tempRoot(), "missing-codex-lb-api-key");
 
   const request = new Request("https://chatgpt.com/backend-api/codex/models", {
     headers: { authorization: "Bearer chatgpt-oauth-must-not-leak" },
   });
 
   await expect(prepareNativeCodexRequest(request)).rejects.toThrow(
-    "requires CODEX_CHATGPT_WEB_NATIVE_API_KEY or CODEX_LB_API_KEY",
+    "requires a dedicated native/Codex-LB API key",
   );
+});
+
+test("reads the persistent Codex-LB key from the default XDG config path", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  delete process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY;
+  delete process.env.CODEX_LB_API_KEY;
+  delete process.env.CODEX_LB_API_KEY_FILE;
+  const configRoot = tempRoot();
+  process.env.XDG_CONFIG_HOME = configRoot;
+  const keyDir = join(configRoot, "codex-web-gpt");
+  mkdirSync(keyDir, { recursive: true });
+  writeFileSync(join(keyDir, "codex-lb-api-key"), "  sk-clb-file-key\n", { mode: 0o600 });
+
+  const request = new Request("https://chatgpt.com/backend-api/codex/models", {
+    headers: { authorization: "Bearer chatgpt-oauth-must-not-leak" },
+  });
+  const prepared = await prepareNativeCodexRequest(request);
+
+  expect(prepared.url).toBe("http://127.0.0.1:2455/backend-api/codex/models");
+  expect(prepared.headers.get("authorization")).toBe("Bearer sk-clb-file-key");
+  expect(prepared.headers.get("authorization")).not.toContain("chatgpt-oauth-must-not-leak");
 });
 
 test("routes native Codex requests to Codex-LB and replaces the ChatGPT OAuth bearer", async () => {
@@ -69,10 +106,13 @@ test("routes native Codex requests to Codex-LB and replaces the ChatGPT OAuth be
   expect(await prepared.json()).toEqual({ model: "gpt-5.6-sol", stream: true });
 });
 
-test("explicit native API key overrides CODEX_LB_API_KEY", async () => {
+test("explicit native API key overrides the persistent Codex-LB key file", async () => {
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
   process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "explicit-native-key";
-  process.env.CODEX_LB_API_KEY = "fallback-lb-key";
+  delete process.env.CODEX_LB_API_KEY;
+  const keyFile = join(tempRoot(), "codex-lb-api-key");
+  writeFileSync(keyFile, "fallback-file-key", { mode: 0o600 });
+  process.env.CODEX_LB_API_KEY_FILE = keyFile;
 
   const request = new Request("https://chatgpt.com/backend-api/codex/models", {
     headers: { authorization: "Bearer chatgpt-oauth" },

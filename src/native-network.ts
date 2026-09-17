@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { readLauncherBrowserHostDescriptor } from "./launcher-browser-host";
 
 const OFFICIAL_CODEX_BACKEND = new URL("https://chatgpt.com/backend-api/codex");
@@ -23,12 +25,40 @@ function nativeUpstreamBase(): URL | undefined {
   return upstream;
 }
 
+function defaultCodexLbApiKeyFile(): string | undefined {
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  if (xdgConfigHome) return join(xdgConfigHome, "codex-web-gpt", "codex-lb-api-key");
+  const home = process.env.HOME?.trim();
+  if (home) return join(home, ".config", "codex-web-gpt", "codex-lb-api-key");
+  return undefined;
+}
+
+function codexLbApiKeyFromFile(): string | undefined {
+  const keyFile = process.env.CODEX_LB_API_KEY_FILE?.trim() || defaultCodexLbApiKeyFile();
+  if (!keyFile) return undefined;
+
+  let raw: string;
+  try {
+    raw = readFileSync(keyFile, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    if (code === "ENOENT") return undefined;
+    throw proxyError(`Could not read Codex-LB API key file: ${keyFile}`);
+  }
+
+  const key = raw.trim();
+  if (!key) throw proxyError(`Codex-LB API key file is empty: ${keyFile}`);
+  return key;
+}
+
 function nativeUpstreamApiKey(): string | undefined {
-  // CODEX_LB_API_KEY is accepted as a convenience only when a custom upstream is configured.
-  // Without CODEX_CHATGPT_WEB_NATIVE_UPSTREAM, native Codex must keep using the incoming ChatGPT OAuth bearer.
+  // Explicit environment credentials remain supported for standalone deployments.
+  // The persistent-file fallback is the normal workstation path and is read by this fork itself.
   return process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY?.trim()
     || process.env.CODEX_LB_API_KEY?.trim()
-    || undefined;
+    || codexLbApiKeyFromFile();
 }
 
 /**
@@ -43,7 +73,7 @@ export async function prepareNativeCodexRequest(request: Request): Promise<Reque
   const apiKey = nativeUpstreamApiKey();
   if (!apiKey) {
     throw proxyError(
-      "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM requires CODEX_CHATGPT_WEB_NATIVE_API_KEY or CODEX_LB_API_KEY",
+      "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM requires a dedicated native/Codex-LB API key or a non-empty Codex-LB API key file",
     );
   }
 
