@@ -12,8 +12,8 @@ jobs:
   build-publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
@@ -28,6 +28,12 @@ jobs:
         run: bun run launcher/scripts/prepare-linux-appimage-tools.cjs
       - run: bun run verify
       - run: bun run app:package
+      - name: Verify Linux AppImage ABI on current Arch
+        run: |
+          artifact="$(find launcher/artifacts -maxdepth 1 -name '*-linux-x64.AppImage' -print -quit)"
+          test -n "$artifact"
+          docker run --rm -v "$PWD:/work:ro" -e APPIMAGE_PATH="/work/$artifact" archlinux:base \
+            sh -lc 'pacman -Sy --noconfirm binutils file glibc alsa-lib at-spi2-core cairo cups gtk3 libx11 libxcb libxcomposite libxdamage libxext libxfixes libxkbcommon libxrandr mesa nspr nss pango >/dev/null && /work/launcher/scripts/smoke-linux-appimage-symbols.sh "$APPIMAGE_PATH"'
       - name: Ensure virtual display is available
         run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
       - run: bun run app:smoke
@@ -55,11 +61,11 @@ jobs:
           else
             gh release create "$tag" release-assets/"$asset_name" release-assets/checksums.txt \
               --repo "$GITHUB_REPOSITORY" \
-              --target main \
+              --target "$GITHUB_SHA" \
               --title "$tag" \
               --latest \
               --generate-notes
           fi
 
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,assets \
-            --jq '{tag: .tagName, assets: [.assets[].name]}'
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,assets,targetCommitish \
+            --jq '{tag: .tagName, target: .targetCommitish, assets: [.assets[].name]}'
