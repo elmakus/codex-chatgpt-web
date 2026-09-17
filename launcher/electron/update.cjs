@@ -258,7 +258,8 @@ function createUpdateController({
 }) {
   const deps = { ...defaultDependencies(), ...dependencies };
   const supportedAsset = releaseAssetName(currentVersion, platform, arch);
-  let state = packaged && supportedAsset ? { status: "idle" } : { status: "disabled" };
+  const disabledByEnvironment = process.env.CODEX_WEB_GPT_DISABLE_UPDATES?.trim() === "1";
+  let state = !disabledByEnvironment && packaged && supportedAsset ? { status: "idle" } : { status: "disabled" };
   let checked = false;
   let pending = null;
   let candidate = null;
