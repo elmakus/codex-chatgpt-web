@@ -25,21 +25,21 @@ export CODEX_CHATGPT_WEB_NATIVE_UPSTREAM=http://127.0.0.1:2455/backend-api/codex
 export CODEX_LB_API_KEY='your-existing-codex-lb-api-key'
 ```
 
-`CODEX_CHATGPT_WEB_NATIVE_API_KEY` may be used instead of `CODEX_LB_API_KEY` when an explicit per-upstream key is preferred:
+A custom native upstream always requires a dedicated upstream API key. `CODEX_CHATGPT_WEB_NATIVE_API_KEY` may be used instead of `CODEX_LB_API_KEY` when an explicit per-upstream key is preferred:
 
 ```bash
 export CODEX_CHATGPT_WEB_NATIVE_API_KEY='your-native-upstream-api-key'
 ```
 
-When both are set, `CODEX_CHATGPT_WEB_NATIVE_API_KEY` wins.
+When both are set, `CODEX_CHATGPT_WEB_NATIVE_API_KEY` wins. If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is set without either key, the request fails closed before any network request is sent to the custom upstream.
 
 The upstream override applies to all native Codex passthrough endpoints, including model discovery, Responses, compaction, Search, and image endpoints, because those requests share the same native network transport.
 
 ## Authentication boundary
 
-Community Edition / Codex Desktop still sends its normal ChatGPT bearer to the local `codex-chatgpt-web` daemon. When a custom native upstream is configured and an upstream API key is present, the network layer replaces `Authorization` before sending the request onward. The original ChatGPT OAuth bearer therefore is not forwarded to Codex-LB.
+Community Edition / Codex Desktop still sends its normal ChatGPT bearer to the local `codex-chatgpt-web` daemon. When a custom native upstream is configured, the network layer requires a dedicated upstream key and replaces `Authorization` before sending the request onward. The original ChatGPT OAuth bearer is therefore never forwarded to the configured custom upstream.
 
-If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is not set, behavior remains unchanged: requests go to `https://chatgpt.com/backend-api/codex` with the incoming native Codex authentication.
+If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is not set, behavior remains unchanged: requests go to `https://chatgpt.com/backend-api/codex` with the incoming native Codex authentication. Merely setting `CODEX_LB_API_KEY` does not alter the official route.
 
 ## Transport
 
