@@ -43,4 +43,6 @@ If `CODEX_CHATGPT_WEB_NATIVE_UPSTREAM` is not set, behavior remains unchanged: r
 
 ## Transport
 
-This integration does not add direct WebSocket passthrough to `codex-chatgpt-web`. The client-to-bridge and bridge-to-Codex-LB native path remains HTTP/SSE. Codex-LB may still use its own upstream WebSocket transport toward the Codex backend according to its configuration.
+This integration does not add direct WebSocket passthrough to `codex-chatgpt-web`. The client-to-bridge and bridge-to-Codex-LB native path remains HTTP/SSE.
+
+Codex-LB can still select its own upstream transport toward the Codex backend. In current Codex-LB builds this is configured in the dashboard under **Settings → Routing → Upstream stream transport** with `auto`, `http`, or `websocket`; `auto` is the default. There is no environment variable for that setting.
