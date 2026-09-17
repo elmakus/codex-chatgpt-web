@@ -55,6 +55,11 @@ jobs:
           (cd release-assets && sha256sum "$asset_name" > checksums.txt)
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "Refusing to replace release assets: $tag resolves to $tag_sha, current build is $GITHUB_SHA" >&2
+              exit 1
+            fi
             gh release upload "$tag" release-assets/"$asset_name" release-assets/checksums.txt \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
