@@ -33,12 +33,19 @@ function nativeUpstreamApiKey(): string | undefined {
 
 /**
  * Rewrite the official Codex backend request to an explicitly configured native upstream.
- * This keeps Community Edition / Codex authenticated at the local bridge while preventing its
- * ChatGPT OAuth bearer from being sent to Codex-LB when a dedicated upstream API key is configured.
+ * A custom upstream must have its own API key so the incoming ChatGPT OAuth bearer can never
+ * be forwarded to a host selected through configuration.
  */
 export async function prepareNativeCodexRequest(request: Request): Promise<Request> {
   const upstream = nativeUpstreamBase();
   if (!upstream) return request;
+
+  const apiKey = nativeUpstreamApiKey();
+  if (!apiKey) {
+    throw proxyError(
+      "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM requires CODEX_CHATGPT_WEB_NATIVE_API_KEY or CODEX_LB_API_KEY",
+    );
+  }
 
   const source = new URL(request.url);
   const officialPath = OFFICIAL_CODEX_BACKEND.pathname.replace(/\/+$/, "");
@@ -53,8 +60,7 @@ export async function prepareNativeCodexRequest(request: Request): Promise<Reque
   target.search = source.search;
 
   const headers = new Headers(request.headers);
-  const apiKey = nativeUpstreamApiKey();
-  if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
+  headers.set("authorization", `Bearer ${apiKey}`);
 
   const method = request.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
