@@ -1,0 +1,35 @@
+name: Repair v5.0.8 checksum
+
+on:
+  push:
+    branches:
+      - "repair/v5.0.8-checksum"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Recompute checksum from published release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tag="v5.0.8"
+          asset="codex-web-gpt-5.0.8-linux-x64.AppImage"
+          mkdir -p repair
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir repair --clobber
+          (
+            cd repair
+            sha256sum "$asset" > checksums.txt
+          )
+          echo "Recomputed checksum:"
+          cat repair/checksums.txt
+          gh release upload "$tag" repair/checksums.txt --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Published release metadata:"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            --jq '.assets[] | select(.name == "codex-web-gpt-5.0.8-linux-x64.AppImage") | {name,digest}'
