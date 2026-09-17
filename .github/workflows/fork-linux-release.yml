@@ -1,0 +1,65 @@
+name: Fork Linux Release
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: launcher
+      - name: Prepare compatible Linux libnotify
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build pkg-config libglib2.0-dev libgdk-pixbuf-2.0-dev binutils
+          ./scripts/prepare-linux-libnotify.sh
+      - name: Prepare owned AppImage toolset
+        run: bun run launcher/scripts/prepare-linux-appimage-tools.cjs
+      - run: bun run verify
+      - run: bun run app:package
+      - name: Ensure virtual display is available
+        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+      - run: bun run app:smoke
+      - name: Publish fork Linux release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME#release/}"
+          expected="v$(jq -r .version package.json)"
+          test "$tag" = "$expected"
+
+          artifact="$(find launcher/artifacts -maxdepth 1 -name '*-linux-x64.AppImage' -print -quit)"
+          test -n "$artifact"
+          mkdir -p release-assets
+          cp "$artifact" release-assets/
+          asset_name="$(basename "$artifact")"
+          (cd release-assets && sha256sum "$asset_name" > checksums.txt)
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/"$asset_name" release-assets/checksums.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$tag" release-assets/"$asset_name" release-assets/checksums.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target main \
+              --title "$tag" \
+              --latest \
+              --generate-notes
+          fi
+
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,assets \
+            --jq '{tag: .tagName, assets: [.assets[].name]}'
