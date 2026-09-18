@@ -181,6 +181,33 @@ test("keeps non-Muse native models on Codex-LB when the Muse proxy is configured
   expect(prepared.headers.get("authorization")).toBe("Bearer codex-lb-key");
 });
 
+test("fails closed for Muse models when the Muse upstream is absent while native Codex still uses Codex-LB", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  delete process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM;
+  delete process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY;
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY_FILE = join(tempRoot(), "missing-muse-key");
+
+  const muse = new Request("https://chatgpt.com/backend-api/codex/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer chatgpt-oauth", "content-type": "application/json" },
+    body: JSON.stringify({ model: "muse-spark-1.3", input: "hello" }),
+  });
+  await expect(prepareNativeCodexRequest(muse)).rejects.toThrow(
+    "Muse native routing requires CODEX_CHATGPT_WEB_MUSE_UPSTREAM",
+  );
+
+  const codex = new Request("https://chatgpt.com/backend-api/codex/responses", {
+    method: "POST",
+    headers: { authorization: "Bearer chatgpt-oauth", "content-type": "application/json" },
+    body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+  });
+  const prepared = await prepareNativeCodexRequest(codex);
+
+  expect(prepared.url).toBe("http://127.0.0.1:2455/backend-api/codex/responses");
+  expect(prepared.headers.get("authorization")).toBe("Bearer codex-lb-key");
+});
+
 test("fails only Muse routing when the parallel proxy has no ingress key", async () => {
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
   process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
