@@ -175,3 +175,98 @@ test("ChatGPT-only native catalog rows do not turn model discovery into a 502", 
   expect(body.models.filter(model => model.slug.startsWith("chatgpt-web/"))
     .every(model => model.supported_in_api === true)).toBe(true);
 });
+
+
+test("merges only Muse rows from the parallel CLIProxyAPI catalog before ChatGPT Web rows", async () => {
+  const request = new Request("http://127.0.0.1:17841/v1/models?client_version=1.2.3", {
+    headers: { authorization: "Bearer codex-oauth-token" },
+  });
+  const config = defaultConfig("full");
+  config.subagentProtocol = "native";
+
+  let primaryCalls = 0;
+  let museCalls = 0;
+  const response = await modelsRequest(
+    request,
+    config,
+    async () => {
+      primaryCalls += 1;
+      return Response.json({
+        models: [{
+          slug: "gpt-5.6-sol",
+          display_name: "5.6 Sol",
+          priority: 1,
+          visibility: "list",
+          supported_in_api: true,
+          multi_agent_version: "v2",
+          supported_reasoning_levels: [{ effort: "high", description: "High" }],
+          tool_mode: "code_mode_only",
+        }],
+      });
+    },
+    undefined,
+    undefined,
+    async input => {
+      museCalls += 1;
+      expect(input.url).toBe("https://chatgpt.com/backend-api/codex/models?client_version=1.2.3");
+      return Response.json({
+        models: [
+          {
+            slug: "muse-spark-1.3",
+            display_name: "Muse Spark 1.3",
+            visibility: "list",
+            supported_in_api: true,
+            supported_reasoning_levels: [{ effort: "high", description: "High" }],
+            tool_mode: "code_mode_only",
+          },
+          {
+            slug: "claude-sonnet",
+            display_name: "Must not leak from CLIProxyAPI",
+            visibility: "list",
+          },
+        ],
+      });
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(primaryCalls).toBe(1);
+  expect(museCalls).toBe(1);
+  const body = await response.json() as { models: Array<{ slug: string }> };
+  expect(body.models.map(model => model.slug)).toEqual([
+    "gpt-5.6-sol",
+    "muse-spark-1.3",
+    "chatgpt-web/light",
+    "chatgpt-web/medium",
+    "chatgpt-web/high",
+  ]);
+});
+
+test("keeps the primary catalog available when the optional Muse catalog is down", async () => {
+  const config = defaultConfig("browser-only");
+  const response = await modelsRequest(
+    new Request("http://127.0.0.1:17841/v1/models", {
+      headers: { authorization: "Bearer codex-oauth-token" },
+    }),
+    config,
+    async () => Response.json({
+      models: [{
+        slug: "gpt-5.6-sol",
+        display_name: "5.6 Sol",
+        visibility: "list",
+        supported_in_api: true,
+        supported_reasoning_levels: [{ effort: "high", description: "High" }],
+        tool_mode: "code_mode_only",
+      }],
+    }),
+    undefined,
+    undefined,
+    async () => new Response("CLIProxyAPI unavailable", { status: 503 }),
+  );
+
+  expect(response.status).toBe(200);
+  const body = await response.json() as { models: Array<{ slug: string }> };
+  expect(body.models.some(model => model.slug === "gpt-5.6-sol")).toBe(true);
+  expect(body.models.some(model => model.slug.startsWith("muse-"))).toBe(false);
+  expect(body.models.some(model => model.slug.startsWith("chatgpt-web/"))).toBe(true);
+});
