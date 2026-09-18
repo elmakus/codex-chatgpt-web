@@ -36,6 +36,10 @@ const builderArgs = [
   "never",
 ];
 if (target === "--mac" && !env.CSC_LINK && !env.CSC_NAME) {
+  // electron-builder skips signing for pull_request events by default. This path has no signing
+  // credentials and already selects ad-hoc identity "-", so allowing PR signing cannot expose a
+  // certificate or private key; it only keeps the archive's codesign verification meaningful.
+  if (env.GITHUB_EVENT_NAME === "pull_request") env.CSC_FOR_PULL_REQUEST = "true";
   builderArgs.push("--config.mac.identity=-");
 }
 
