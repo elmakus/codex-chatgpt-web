@@ -195,3 +195,44 @@ export function augmentNativeModelCatalog(
     models: [...nativeModels, ...webModels],
   };
 }
+
+
+/**
+ * Merge the optional Muse/CLIProxyAPI catalog beside the primary native catalog.
+ *
+ * CLIProxyAPI may expose providers other than Meta, so only public `muse-*` rows are imported.
+ * Existing Muse rows in the primary catalog are replaced, while ChatGPT Web rows remain last.
+ */
+export function mergeMuseNativeModelCatalog(value: unknown, museValue: unknown): JsonObject {
+  const catalog = object(value, "augmented native Codex models response");
+  const museCatalog = object(museValue, "Muse native models response");
+  if (!Array.isArray(catalog.models)) {
+    throw new Error("Augmented native Codex models response is missing a models array");
+  }
+  if (!Array.isArray(museCatalog.models)) {
+    throw new Error("Muse native models response is missing a models array");
+  }
+
+  const museModels: JsonObject[] = [];
+  const seen = new Set<string>();
+  for (const candidate of museCatalog.models) {
+    const modelSlug = slug(candidate);
+    if (!modelSlug?.startsWith("muse-") || seen.has(modelSlug)) continue;
+    seen.add(modelSlug);
+    museModels.push(structuredClone(object(candidate, `Muse native ${modelSlug} model`)));
+  }
+
+  const primaryNative: unknown[] = [];
+  const webModels: unknown[] = [];
+  for (const candidate of catalog.models) {
+    const modelSlug = slug(candidate);
+    if (modelSlug?.startsWith("muse-")) continue;
+    if (modelSlug?.startsWith(CHATGPT_WEB_MODEL_PREFIX)) webModels.push(structuredClone(candidate));
+    else primaryNative.push(structuredClone(candidate));
+  }
+
+  return {
+    ...structuredClone(catalog),
+    models: [...primaryNative, ...museModels, ...webModels],
+  };
+}

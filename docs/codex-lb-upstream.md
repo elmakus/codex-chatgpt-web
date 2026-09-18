@@ -56,6 +56,52 @@ Resolution order is `CODEX_CHATGPT_WEB_NATIVE_API_KEY`, then `CODEX_LB_API_KEY`,
 
 Model discovery uses the same native transport as Responses, compaction, Search, and image endpoints. When the native upstream points at Codex-LB, the native model rows returned by Codex-LB are kept and the fork appends its `chatgpt-web/*` rows. The resulting Codex model picker therefore exposes the Codex-LB native catalog together with the ChatGPT Web models supplied by this fork.
 
+## Parallel Meta Muse upstream
+
+Codex-LB can remain the primary native upstream while Meta Muse models are routed independently through CLIProxyAPI. The proxies are peers; Codex-LB is not configured behind CLIProxyAPI.
+
+```text
+ChatGPT Community Edition / Codex Desktop
+                |
+                v
+       codex-chatgpt-web
+          |       |       |
+          |       |       `-- muse-* ----------> CLIProxyAPI --> Meta OAuth
+          |       `---------- native Codex ----> Codex-LB
+          `------------------ chatgpt-web/* ---> ChatGPT Web
+```
+
+Keep the existing Codex-LB settings and add the Muse proxy:
+
+```bash
+export CODEX_CHATGPT_WEB_NATIVE_UPSTREAM=http://127.0.0.1:2455/backend-api/codex
+export CODEX_CHATGPT_WEB_MUSE_UPSTREAM=http://127.0.0.1:8317/v1
+```
+
+The Muse hop has a separate ingress API key. It is the API key accepted by CLIProxyAPI itself; Meta OAuth credentials remain owned by CLIProxyAPI and are never stored in this bridge.
+
+```bash
+export CODEX_CHATGPT_WEB_MUSE_API_KEY='your-cliproxyapi-ingress-key'
+```
+
+For persistent workstation configuration, the Muse key can instead be stored at:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/codex-web-gpt/muse-proxy-api-key
+```
+
+or at a custom path selected with `CODEX_CHATGPT_WEB_MUSE_API_KEY_FILE`.
+
+Routing is deterministic by public model ID:
+
+- `muse-*` -> CLIProxyAPI
+- every other native model -> existing native/Codex-LB upstream
+- `chatgpt-web/*` -> local ChatGPT Web adapter
+
+Model discovery queries both native proxies. Only `muse-*` rows are imported from the CLIProxyAPI catalog, so unrelated providers exposed by that proxy do not appear in ChatGPT CE. If the optional Muse catalog is unavailable, the primary Codex-LB catalog and `chatgpt-web/*` rows remain available.
+
+The same routing rule applies to native Responses, compact, Search, and image requests whenever the request carries a model ID. Provider capability remains authoritative: routing a Muse request to CLIProxyAPI does not imply that Meta supports every Codex endpoint.
+
 ## Authentication boundary
 
 Community Edition / Codex Desktop still sends its normal ChatGPT bearer to the local `codex-chatgpt-web` daemon. When a custom native upstream is configured, the network layer requires the dedicated upstream key and replaces `Authorization` before sending the request onward. The original ChatGPT OAuth bearer is therefore never forwarded to the configured custom upstream.

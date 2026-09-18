@@ -27,7 +27,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "host",
 ]);
 
-export type NativeFetch = (request: Request) => Promise<Response>;
+export type NativeFetch = (request: Request, modelHint?: string) => Promise<Response>;
 export type NativeImageEndpoint = "images/generations" | "images/edits";
 export type NativeCodexEndpoint = "models" | "responses" | "responses/compact" | "alpha/search" | NativeImageEndpoint;
 
@@ -259,7 +259,7 @@ export async function forwardNativeCodexRequest(
     // forwarding account headers to a redirect destination.
     redirect: imageRequest ? "manual" : "follow",
   });
-  const upstream = await fetchUpstream(upstreamRequest);
+  const upstream = await fetchUpstream(upstreamRequest, model);
   if (compactionRequest && !upstream.ok) {
     console.warn(`[codex-chatgpt-web] native_compaction_upstream_failed ${JSON.stringify({
       endpoint, model, status: upstream.status,

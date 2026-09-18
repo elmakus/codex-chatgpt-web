@@ -23,7 +23,7 @@ import { AsyncEventQueue } from "./event-queue";
 import { readJsonRequestBody } from "./http-body";
 import { httpStatusFromTerminalError } from "./lib/errors";
 import { createHash } from "node:crypto";
-import { augmentNativeModelCatalog } from "./model-catalog";
+import { augmentNativeModelCatalog, mergeMuseNativeModelCatalog } from "./model-catalog";
 import {
   readCodexModelContextOverride,
   readCodexSubagentProtocol,
@@ -36,7 +36,7 @@ import {
   type ChatGptWebModelRoute,
 } from "./chatgpt-web-models";
 import { forwardNativeCodexRequest, type NativeFetch, type NativeImageEndpoint } from "./native-passthrough";
-import { fetchNativeCodex } from "./native-network";
+import { fetchMuseCodex, fetchNativeCodex, hasMuseNativeUpstream } from "./native-network";
 import {
   buildCompactV1Output,
   COMPACT_PROMPT,
@@ -389,6 +389,7 @@ export async function modelsRequest(
   fetchUpstream?: NativeFetch,
   contextOverride?: () => CodexModelContextOverride | undefined,
   onFailure?: (failure: ModelCatalogFailure) => void,
+  fetchMuseUpstream?: NativeFetch,
 ): Promise<Response> {
   let upstream: Response;
   let sent = false;
@@ -412,6 +413,29 @@ export async function modelsRequest(
     onFailure?.(modelCatalogFailure("catalog", error));
     return formatErrorResponse(502, "invalid_response_error", error instanceof Error ? error.message : String(error));
   }
+
+  if (fetchMuseUpstream || hasMuseNativeUpstream()) {
+    try {
+      const museUpstream = await forwardNativeCodexRequest(
+        req.clone(),
+        "models",
+        fetchMuseUpstream ?? fetchMuseCodex,
+      );
+      if (!museUpstream.ok) {
+        throw new Error(`Muse upstream model catalog returned HTTP ${museUpstream.status}`);
+      }
+      catalog = mergeMuseNativeModelCatalog(catalog, await museUpstream.json());
+    } catch (error) {
+      // Muse is an optional parallel backend. A CLIProxyAPI outage must not take Codex-LB or
+      // chatgpt-web/* out of the picker; the missing Muse rows make the degradation explicit.
+      console.warn(
+        `[codex-chatgpt-web] muse_model_catalog_failed ${JSON.stringify({
+          error: error instanceof Error ? error.message : String(error),
+        })}`,
+      );
+    }
+  }
+
   const body = JSON.stringify(catalog);
   const headers = new Headers(upstream.headers);
   headers.delete("content-encoding");
@@ -790,7 +814,11 @@ export async function compactRequest(
 
 export function startServer(
   config: AppConfig,
-  dependencies: { fetchUpstream?: NativeFetch; adapterFactory?: ChatGptWebAdapterFactory } = {},
+  dependencies: {
+    fetchUpstream?: NativeFetch;
+    fetchMuseUpstream?: NativeFetch;
+    adapterFactory?: ChatGptWebAdapterFactory;
+  } = {},
 ): ReturnType<typeof Bun.serve> {
   if (config.purpose === "dev-harness") {
     throw new Error("DEV harness configuration cannot start a Responses listener");
@@ -1026,6 +1054,7 @@ export function startServer(
             dependencies.fetchUpstream,
             readCodexModelContextOverride,
             value => { failure = value; },
+            dependencies.fetchMuseUpstream,
           );
           if (response.ok) {
             successfulModelCatalogRequests += 1;
