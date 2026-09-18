@@ -4,25 +4,45 @@ import { readLauncherBrowserHostDescriptor } from "./launcher-browser-host";
 
 const OFFICIAL_CODEX_BACKEND = new URL("https://chatgpt.com/backend-api/codex");
 
+type NativeUpstreamRoute = "auto" | "native" | "muse";
+
 function proxyError(message: string): Error {
   return Object.assign(new Error(message), { code: "NativeProxyConfigurationError" });
 }
 
-function nativeUpstreamBase(): URL | undefined {
-  const raw = process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM?.trim();
-  if (!raw) return undefined;
+function configuredUpstream(raw: string | undefined, name: string): URL | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
   let upstream: URL;
   try {
-    upstream = new URL(raw);
+    upstream = new URL(value);
   } catch {
-    throw proxyError("CODEX_CHATGPT_WEB_NATIVE_UPSTREAM must be a valid HTTP(S) URL");
+    throw proxyError(`${name} must be a valid HTTP(S) URL`);
   }
   if ((upstream.protocol !== "http:" && upstream.protocol !== "https:")
     || upstream.username || upstream.password || upstream.search || upstream.hash) {
-    throw proxyError("CODEX_CHATGPT_WEB_NATIVE_UPSTREAM must be an HTTP(S) base URL without credentials, query, or fragment");
+    throw proxyError(`${name} must be an HTTP(S) base URL without credentials, query, or fragment`);
   }
   upstream.pathname = upstream.pathname.replace(/\/+$/, "");
   return upstream;
+}
+
+function nativeUpstreamBase(): URL | undefined {
+  return configuredUpstream(
+    process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM,
+    "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM",
+  );
+}
+
+function museUpstreamBase(): URL | undefined {
+  return configuredUpstream(
+    process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM,
+    "CODEX_CHATGPT_WEB_MUSE_UPSTREAM",
+  );
+}
+
+export function hasMuseNativeUpstream(): boolean {
+  return Boolean(process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM?.trim());
 }
 
 function defaultCodexLbApiKeyFile(): string | undefined {
@@ -33,8 +53,15 @@ function defaultCodexLbApiKeyFile(): string | undefined {
   return undefined;
 }
 
-function codexLbApiKeyFromFile(): string | undefined {
-  const keyFile = process.env.CODEX_LB_API_KEY_FILE?.trim() || defaultCodexLbApiKeyFile();
+function defaultMuseApiKeyFile(): string | undefined {
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  if (xdgConfigHome) return join(xdgConfigHome, "codex-web-gpt", "muse-proxy-api-key");
+  const home = process.env.HOME?.trim();
+  if (home) return join(home, ".config", "codex-web-gpt", "muse-proxy-api-key");
+  return undefined;
+}
+
+function apiKeyFromFile(keyFile: string | undefined, label: string): string | undefined {
   if (!keyFile) return undefined;
 
   let raw: string;
@@ -45,12 +72,22 @@ function codexLbApiKeyFromFile(): string | undefined {
       ? (error as { code?: unknown }).code
       : undefined;
     if (code === "ENOENT") return undefined;
-    throw proxyError(`Could not read Codex-LB API key file: ${keyFile}`);
+    throw proxyError(`Could not read ${label} API key file: ${keyFile}`);
   }
 
   const key = raw.trim();
-  if (!key) throw proxyError(`Codex-LB API key file is empty: ${keyFile}`);
+  if (!key) throw proxyError(`${label} API key file is empty: ${keyFile}`);
   return key;
+}
+
+function codexLbApiKeyFromFile(): string | undefined {
+  const keyFile = process.env.CODEX_LB_API_KEY_FILE?.trim() || defaultCodexLbApiKeyFile();
+  return apiKeyFromFile(keyFile, "Codex-LB");
+}
+
+function museApiKeyFromFile(): string | undefined {
+  const keyFile = process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY_FILE?.trim() || defaultMuseApiKeyFile();
+  return apiKeyFromFile(keyFile, "Muse/CLIProxyAPI");
 }
 
 function nativeUpstreamApiKey(): string | undefined {
@@ -61,22 +98,29 @@ function nativeUpstreamApiKey(): string | undefined {
     || codexLbApiKeyFromFile();
 }
 
-/**
- * Rewrite the official Codex backend request to an explicitly configured native upstream.
- * A custom upstream must have its own API key so the incoming ChatGPT OAuth bearer can never
- * be forwarded to a host selected through configuration.
- */
-export async function prepareNativeCodexRequest(request: Request): Promise<Request> {
-  const upstream = nativeUpstreamBase();
-  if (!upstream) return request;
+function museUpstreamApiKey(): string | undefined {
+  return process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY?.trim()
+    || museApiKeyFromFile();
+}
 
-  const apiKey = nativeUpstreamApiKey();
-  if (!apiKey) {
-    throw proxyError(
-      "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM requires a dedicated native/Codex-LB API key or a non-empty Codex-LB API key file",
-    );
+export function isMuseNativeModel(model: string | undefined): boolean {
+  return Boolean(model?.startsWith("muse-"));
+}
+
+async function requestModel(request: Request): Promise<string | undefined> {
+  const method = request.method.toUpperCase();
+  if (method === "GET" || method === "HEAD") return undefined;
+  try {
+    const value = await request.clone().json() as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const model = (value as { model?: unknown }).model;
+    return typeof model === "string" && /^[A-Za-z0-9_./:-]{1,128}$/.test(model) ? model : undefined;
+  } catch {
+    return undefined;
   }
+}
 
+function rewriteNativeCodexRequest(request: Request, upstream: URL, apiKey: string): Promise<Request> {
   const source = new URL(request.url);
   const officialPath = OFFICIAL_CODEX_BACKEND.pathname.replace(/\/+$/, "");
   if (source.origin !== OFFICIAL_CODEX_BACKEND.origin
@@ -93,14 +137,56 @@ export async function prepareNativeCodexRequest(request: Request): Promise<Reque
   headers.set("authorization", `Bearer ${apiKey}`);
 
   const method = request.method.toUpperCase();
-  const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-  return new Request(target, {
+  return request.arrayBuffer().then(body => new Request(target, {
     method: request.method,
     headers,
-    ...(body ? { body } : {}),
+    ...(method === "GET" || method === "HEAD" ? {} : { body }),
     signal: request.signal,
     redirect: request.redirect,
-  });
+  }));
+}
+
+/**
+ * Rewrite an official Codex backend request to the configured parallel native upstream.
+ *
+ * Native Codex models use CODEX_CHATGPT_WEB_NATIVE_UPSTREAM. Muse model IDs use the optional
+ * CODEX_CHATGPT_WEB_MUSE_UPSTREAM instead. Each upstream owns a separate API key so the incoming
+ * ChatGPT OAuth bearer is never forwarded to either configured proxy.
+ */
+export async function prepareNativeCodexRequest(
+  request: Request,
+  route: NativeUpstreamRoute = "auto",
+): Promise<Request> {
+  const model = route === "auto" ? await requestModel(request) : undefined;
+  const selectedRoute = route === "auto"
+    ? (hasMuseNativeUpstream() && isMuseNativeModel(model) ? "muse" : "native")
+    : route;
+
+  if (selectedRoute === "muse") {
+    const upstream = museUpstreamBase();
+    if (!upstream) {
+      throw proxyError("Muse native routing requires CODEX_CHATGPT_WEB_MUSE_UPSTREAM");
+    }
+    const apiKey = museUpstreamApiKey();
+    if (!apiKey) {
+      throw proxyError(
+        "CODEX_CHATGPT_WEB_MUSE_UPSTREAM requires CODEX_CHATGPT_WEB_MUSE_API_KEY"
+        + " or a non-empty Muse/CLIProxyAPI API key file",
+      );
+    }
+    return rewriteNativeCodexRequest(request, upstream, apiKey);
+  }
+
+  const upstream = nativeUpstreamBase();
+  if (!upstream) return request;
+
+  const apiKey = nativeUpstreamApiKey();
+  if (!apiKey) {
+    throw proxyError(
+      "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM requires a dedicated native/Codex-LB API key or a non-empty Codex-LB API key file",
+    );
+  }
+  return rewriteNativeCodexRequest(request, upstream, apiKey);
 }
 
 /** Use the first route selected by Chromium, without guessing another proxy protocol or retrying. */
@@ -123,9 +209,7 @@ export function nativeProxyFromPac(value: unknown): string | undefined {
   }
 }
 
-/** Native Codex keeps its own auth and Bun transport, but shares the launcher's OS proxy policy. */
-export async function fetchNativeCodex(request: Request): Promise<Response> {
-  const upstreamRequest = await prepareNativeCodexRequest(request);
+async function fetchPreparedNativeCodex(upstreamRequest: Request): Promise<Response> {
   const descriptorPath = process.env.CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR?.trim();
   // Standalone CLI and explicitly configured proxy environments retain Bun's existing semantics,
   // including NO_PROXY. No proxy variables or machine-wide settings are rewritten.
@@ -144,4 +228,14 @@ export async function fetchNativeCodex(request: Request): Promise<Response> {
   const result = await response.json() as { proxy?: unknown };
   const proxy = nativeProxyFromPac(result.proxy);
   return fetch(upstreamRequest, proxy ? { proxy } : undefined);
+}
+
+/** Native Codex keeps its own auth and Bun transport, but shares the launcher's OS proxy policy. */
+export async function fetchNativeCodex(request: Request): Promise<Response> {
+  return fetchPreparedNativeCodex(await prepareNativeCodexRequest(request));
+}
+
+/** Force one request through the configured Muse/CLIProxyAPI upstream, used for model discovery. */
+export async function fetchMuseCodex(request: Request): Promise<Response> {
+  return fetchPreparedNativeCodex(await prepareNativeCodexRequest(request, "muse"));
 }
