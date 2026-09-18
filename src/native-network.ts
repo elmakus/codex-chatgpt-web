@@ -159,7 +159,7 @@ export async function prepareNativeCodexRequest(
 ): Promise<Request> {
   const model = route === "auto" ? await requestModel(request) : undefined;
   const selectedRoute = route === "auto"
-    ? (hasMuseNativeUpstream() && isMuseNativeModel(model) ? "muse" : "native")
+    ? (isMuseNativeModel(model) ? "muse" : "native")
     : route;
 
   if (selectedRoute === "muse") {
