@@ -156,8 +156,9 @@ function rewriteNativeCodexRequest(request: Request, upstream: URL, apiKey: stri
 export async function prepareNativeCodexRequest(
   request: Request,
   route: NativeUpstreamRoute = "auto",
+  modelHint?: string,
 ): Promise<Request> {
-  const model = route === "auto" ? await requestModel(request) : undefined;
+  const model = route === "auto" ? (modelHint ?? await requestModel(request)) : undefined;
   const selectedRoute = route === "auto"
     ? (isMuseNativeModel(model) ? "muse" : "native")
     : route;
@@ -231,8 +232,8 @@ async function fetchPreparedNativeCodex(upstreamRequest: Request): Promise<Respo
 }
 
 /** Native Codex keeps its own auth and Bun transport, but shares the launcher's OS proxy policy. */
-export async function fetchNativeCodex(request: Request): Promise<Response> {
-  return fetchPreparedNativeCodex(await prepareNativeCodexRequest(request));
+export async function fetchNativeCodex(request: Request, modelHint?: string): Promise<Response> {
+  return fetchPreparedNativeCodex(await prepareNativeCodexRequest(request, "auto", modelHint));
 }
 
 /** Force one request through the configured Muse/CLIProxyAPI upstream, used for model discovery. */
