@@ -22,8 +22,10 @@ afterEach(() => {
   }
 });
 
-function zstdNativeRequest(model: string): { request: Request; encoded: Uint8Array } {
-  const encoded = Bun.zstdCompressSync(Buffer.from(JSON.stringify({ model, input: "hello", stream: true })));
+function zstdNativeRequest(model: string): { request: Request; encoded: ArrayBuffer } {
+  const compressed = Bun.zstdCompressSync(Buffer.from(JSON.stringify({ model, input: "hello", stream: true })));
+  const encoded = new ArrayBuffer(compressed.byteLength);
+  new Uint8Array(encoded).set(compressed);
   return {
     encoded,
     request: new Request("http://127.0.0.1:17841/v1/responses", {
