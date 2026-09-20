@@ -6,7 +6,8 @@ import { fetchNativeCodex, nativeProxyFromPac } from "../src/native-network";
 import { LAUNCHER_BROWSER_IDLE_URL } from "../src/launcher-browser-host";
 
 const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
-  "NO_PROXY", "no_proxy", "CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR"];
+  "NO_PROXY", "no_proxy", "CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR",
+  "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM", "CODEX_CHATGPT_WEB_NATIVE_API_KEY"];
 const savedEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
 afterEach(() => {
   for (const key of envKeys) {
@@ -100,3 +101,61 @@ test("native fetch reaches a proxy-only target, refreshes routing, and never ret
     rmSync(root, { recursive: true, force: true });
   }
 }, 15_000);
+
+
+test("configured Codex-LB resolves the launcher proxy for the rewritten outbound target", async () => {
+  for (const key of envKeys) delete process.env[key];
+  const root = mkdtempSync(join(tmpdir(), "native-network-upstream-"));
+  const upstreamCalls: { url: string; authorization: string | null; body: string }[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    upstreamCalls.push({
+      url: req.url,
+      authorization: req.headers.get("authorization"),
+      body: await req.text(),
+    });
+    return new Response("data: response\n\ndata: [DONE]\n\n", {
+      headers: { "content-type": "text/event-stream" },
+    });
+  } });
+  const token = "launcher-control-token-upstream-0123456789abcdef";
+  const resolved: string[] = [];
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    expect(new URL(req.url).pathname).toBe("/v1/network/resolve-proxy");
+    expect(req.headers.get("authorization")).toBe(`Bearer ${token}`);
+    const body = await req.json() as { url: string };
+    resolved.push(body.url);
+    return Response.json({ proxy: "DIRECT" });
+  } });
+  const descriptor = join(root, "launcher.json");
+  writeFileSync(descriptor, JSON.stringify({
+    version: 3, kind: "codex-web-gpt-launcher", profile: "production", pid: process.pid,
+    endpoint: "http://127.0.0.1:39110", control: { endpoint: control.url.origin, token },
+    helper: { executable: process.execPath, script: import.meta.path },
+    partition: "persist:codex-web-gpt-chatgpt", idleUrl: LAUNCHER_BROWSER_IDLE_URL,
+    surfaceId: "launcher_surface_id_0123456789AB", surfaceTargets: {}, createdAt: new Date().toISOString(),
+  }), { mode: 0o600 });
+
+  process.env.CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR = descriptor;
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = `${upstream.url.origin}/backend-api/codex`;
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-test-key";
+
+  const request = new Request("https://chatgpt.com/backend-api/codex/responses?foo=bar", {
+    method: "POST",
+    headers: { authorization: "Bearer chatgpt-oauth-must-not-leak", "content-type": "application/json" },
+    body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+  });
+  try {
+    expect(await (await fetchNativeCodex(request)).text()).toContain("data: [DONE]");
+    const rewritten = `${upstream.url.origin}/backend-api/codex/responses?foo=bar`;
+    expect(resolved).toEqual([rewritten]);
+    expect(upstreamCalls).toEqual([{
+      url: rewritten,
+      authorization: "Bearer codex-lb-test-key",
+      body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+    }]);
+  } finally {
+    control.stop(true);
+    upstream.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
