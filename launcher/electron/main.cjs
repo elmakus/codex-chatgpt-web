@@ -1057,6 +1057,10 @@ async function start() {
     getBrowserHost: () => browserHost,
     getPreferences: () => stateStore.read(),
     resolveProxy: url => session.fromPartition(LAUNCHER_PROFILE.browserPartition).resolveProxy(url),
+    proxyResolutionBases: [
+      process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM,
+      process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM,
+    ],
   }).start();
   runtimeSupervisor = new RuntimeSupervisor({
     app,
