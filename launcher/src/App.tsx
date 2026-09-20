@@ -439,21 +439,17 @@ function LauncherShell({
       return;
     }
 
-    let cancelled = false;
     let timer: number | undefined;
     const refreshOrRemind = () => {
-      if (sessionAutoRefreshAttemptRef.current === reminderAt) {
-        setSessionReminderDue(true);
-        return;
-      }
+      if (sessionAutoRefreshAttemptRef.current === reminderAt) return;
       sessionAutoRefreshAttemptRef.current = reminderAt;
       setSessionReminderDue(false);
       void api!.refreshSessionReminder().then((result) => {
-        if (cancelled) return;
         updateState(result.state);
-        setSessionReminderDue(result.attempted && !result.refreshed);
+        setSessionReminderDue(
+          result.attempted && !result.refreshed && result.browser.authenticated,
+        );
       }).catch((cause) => {
-        if (cancelled) return;
         setError(messageOf(cause));
         setSessionReminderDue(true);
       });
@@ -468,7 +464,6 @@ function LauncherShell({
       timer = window.setTimeout(refreshOrRemind, delay);
     }
     return () => {
-      cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [
