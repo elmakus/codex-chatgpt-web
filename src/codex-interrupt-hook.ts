@@ -149,13 +149,27 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   const stateOffset = stateHeader.index + stateHeader[0].length - stateHeader[1].length;
   // The native TOML writer can insert unrelated tables between the hook and its trust state.
   // Locate the two owned definitions separately, retaining exact command/field matching.
-  const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map(fragment => {
+  //
+  // Current Codex may normalize an enabled command hook by materializing `enabled = true`
+  // immediately after the managed hook fields. That field is semantically equivalent to the
+  // installed default and does not change the command identity/trusted hash. Tolerate only that
+  // exact native normalization and include it in the owned range so restore removes it too.
+  let nativeEnabledNormalization = false;
+  const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map((fragment, index) => {
     const pattern = new RegExp(hookTextPattern(fragment), "g");
     const match = pattern.exec(text);
     if (!match || pattern.exec(text)) {
       throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
     }
-    return { start: match.index, end: match.index + match[0].length };
+    let end = match.index + match[0].length;
+    if (index === 0) {
+      const enabled = /^(?:enabled = true)(?:\r\n|\n|\r)/.exec(text.slice(end));
+      if (enabled) {
+        nativeEnabledNormalization = true;
+        end += enabled[0].length;
+      }
+    }
+    return { start: match.index, end };
   });
   const [hook, state] = ranges;
   if (!hook || !state || state.start < hook.end) {
@@ -173,9 +187,15 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   if (codexInterruptHookHash(installed.command) !== installed.trustedHash) {
     throw new Error("Codex interrupt lifecycle hook journal hash is invalid");
   }
-  const definitions = (value: unknown, groupIndex: number): string => {
+  const definitions = (value: unknown, groupIndex: number, normalizeNativeEnabled = false): string => {
     const { hooks } = value as { hooks: { Interrupt: unknown[]; state: Record<string, unknown> } };
-    return JSON.stringify(canonicalJson([hooks.Interrupt[groupIndex], hooks.state[installed.stateKey]]));
+    let interrupt = hooks.Interrupt[groupIndex];
+    if (normalizeNativeEnabled && interrupt && typeof interrupt === "object" && !Array.isArray(interrupt)) {
+      const normalized = { ...(interrupt as Record<string, unknown>) };
+      if (normalized.enabled === true) delete normalized.enabled;
+      interrupt = normalized;
+    }
+    return JSON.stringify(canonicalJson([interrupt, hooks.state[installed.stateKey]]));
   };
   // Check the complete document: an interleaved or later table must not extend either owned
   // definition, and a matching fragment inside a multiline string must not establish ownership.
@@ -183,7 +203,7 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   try {
     parsed = Bun.TOML.parse(text.replace(/\r\n?/g, "\n"));
     const expected = Bun.TOML.parse(ownedPrefix.replace(/\r\n?/g, "\n"));
-    if (definitions(parsed, installed.groupIndex) !== definitions(expected, 0)) {
+    if (definitions(parsed, installed.groupIndex, nativeEnabledNormalization) !== definitions(expected, 0)) {
       throw new Error("Modified owned definitions");
     }
   } catch {
