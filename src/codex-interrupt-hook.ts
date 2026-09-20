@@ -192,7 +192,12 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     let interrupt = hooks.Interrupt[groupIndex];
     if (normalizeNativeEnabled && interrupt && typeof interrupt === "object" && !Array.isArray(interrupt)) {
       const normalized = { ...(interrupt as Record<string, unknown>) };
-      if (normalized.enabled === true) delete normalized.enabled;
+      const commands = normalized.hooks;
+      if (Array.isArray(commands) && commands[0] && typeof commands[0] === "object" && !Array.isArray(commands[0])) {
+        const command = { ...(commands[0] as Record<string, unknown>) };
+        if (command.enabled === true) delete command.enabled;
+        normalized.hooks = [command, ...commands.slice(1)];
+      }
       interrupt = normalized;
     }
     return JSON.stringify(canonicalJson([interrupt, hooks.state[installed.stateKey]]));
