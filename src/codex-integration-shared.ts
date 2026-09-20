@@ -13,6 +13,7 @@ export const MANAGED_REMOTE_COMPACTION_LINE =
   "remote_compaction_v2 = false # Managed by codex-chatgpt-web: bounds retained Web image history.";
 export const MANAGED_MULTI_AGENT_LINE =
   "multi_agent = true # Managed by codex-chatgpt-web: enables routed Web subagents.";
+export const NATIVE_NORMALIZED_MULTI_AGENT_LINE = "multi_agent = true";
 export const MANAGED_MULTI_AGENT_V2_LINE =
   "multi_agent_v2 = false # Managed by codex-chatgpt-web: keeps routed Web subagent payloads readable.";
 export const MANAGED_MULTI_AGENT_V2_TABLE_LINE =
