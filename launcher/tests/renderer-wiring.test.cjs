@@ -389,3 +389,13 @@ test("catalog verification reports a failed request instead of requesting anothe
   assert.equal(state.codexRestartRequired, false);
   assert.ok(events.some(([event]) => event === "codex.model_catalog_verified"));
 });
+
+
+test("due session reminders auto-refresh through the bounded launcher IPC", () => {
+  assert.match(preloadSource, /refreshSessionReminder: \(\) => ipcRenderer\.invoke\("launcher:session-reminder-refresh"\)/);
+  assert.match(electronMain, /refreshDueSessionReminder\(\{ browserHost, stateStore \}\)/);
+  assert.match(electronMain, /if \(result\.refreshed\) send\("launcher:state-changed", result\.state\)/);
+  assert.match(appSource, /sessionAutoRefreshAttemptRef/);
+  assert.match(appSource, /api!\.refreshSessionReminder\(\)/);
+  assert.match(appSource, /setSessionReminderDue\(result\.attempted && !result\.refreshed\)/);
+});

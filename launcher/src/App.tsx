@@ -346,6 +346,7 @@ function LauncherShell({
   const [browserSlot, setBrowserSlot] = useState<HTMLDivElement | null>(null);
   const [sessionReminderBusy, setSessionReminderBusy] = useState(false);
   const [sessionReminderDue, setSessionReminderDue] = useState(false);
+  const sessionAutoRefreshAttemptRef = useRef<string | null>(null);
   const [mcpTargetMode, setMcpTargetMode] = useState<BrowserInteractionMode | null>(null);
   const [biggerContextRecommendationOpen, setBiggerContextRecommendationOpen] = useState(
     snapshot.state.browserInteractionMode === "automatic"
@@ -431,19 +432,52 @@ function LauncherShell({
   useEffect(() => {
     const reminderAt = snapshot.state.sessionRefreshReminderAt;
     const reminderTime = reminderAt === null ? Number.NaN : Date.parse(reminderAt);
-    if (browser?.authenticated !== true || !Number.isFinite(reminderTime)) {
+    if (snapshot.state.browserInteractionMode !== "automatic"
+      || browser?.authenticated !== true
+      || !Number.isFinite(reminderTime)) {
       setSessionReminderDue(false);
       return;
     }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const refreshOrRemind = () => {
+      if (sessionAutoRefreshAttemptRef.current === reminderAt) {
+        setSessionReminderDue(true);
+        return;
+      }
+      sessionAutoRefreshAttemptRef.current = reminderAt;
+      setSessionReminderDue(false);
+      void api!.refreshSessionReminder().then((result) => {
+        if (cancelled) return;
+        updateState(result.state);
+        setSessionReminderDue(result.attempted && !result.refreshed);
+      }).catch((cause) => {
+        if (cancelled) return;
+        setError(messageOf(cause));
+        setSessionReminderDue(true);
+      });
+    };
+
     const delay = reminderTime - Date.now();
     if (delay <= 0) {
-      setSessionReminderDue(true);
-      return;
+      refreshOrRemind();
+    } else {
+      sessionAutoRefreshAttemptRef.current = null;
+      setSessionReminderDue(false);
+      timer = window.setTimeout(refreshOrRemind, delay);
     }
-    setSessionReminderDue(false);
-    const timer = window.setTimeout(() => setSessionReminderDue(true), delay);
-    return () => window.clearTimeout(timer);
-  }, [browser?.authenticated, snapshot.state.sessionRefreshReminderAt]);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    browser?.authenticated,
+    snapshot.state.browserInteractionMode,
+    snapshot.state.sessionRefreshReminderAt,
+    setError,
+    updateState,
+  ]);
 
   const activateBrowser = useCallback(async (show = false) => {
     setSurface("browser");

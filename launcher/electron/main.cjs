@@ -37,6 +37,7 @@ const {
   nextSessionRefreshReminderAt,
   validateSidebarState,
 } = require("./state.cjs");
+const { refreshDueSessionReminder } = require("./session-refresh.cjs");
 const {
   MIN_WINDOW_BOUNDS,
   readWindowState,
@@ -591,6 +592,11 @@ function registerIpc({ logger, stateStore }) {
     const state = stateStore.update({ sessionRefreshReminderAt: nextSessionRefreshReminderAt() });
     send("launcher:state-changed", state);
     return { browser, state };
+  });
+  handle("launcher:session-reminder-refresh", async () => {
+    const result = await refreshDueSessionReminder({ browserHost, stateStore });
+    if (result.refreshed) send("launcher:state-changed", result.state);
+    return result;
   });
   handle("launcher:session-reminder-dismiss", () => {
     const state = stateStore.update({ sessionRefreshReminderAt: nextSessionRefreshReminderAt() });
