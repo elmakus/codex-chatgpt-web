@@ -4,6 +4,7 @@ import {
   MANAGED_COMMENT,
   MANAGED_ROUTE_COMMENT,
   MANAGED_MULTI_AGENT_LINE,
+  NATIVE_NORMALIZED_MULTI_AGENT_LINE,
   MANAGED_MULTI_AGENT_V2_LINE,
   MANAGED_MULTI_AGENT_V2_TABLE_LINE,
   MANAGED_REMOTE_COMPACTION_LINE,
@@ -574,9 +575,12 @@ function verifyInstalledBooleanFeature(
   key: string,
   expectedValue: "true" | "false",
   managedLine: string,
+  allowedRawLines: readonly string[] = [managedLine],
 ): void {
   const current = findFeatureAssignment(splitLines(text), key);
-  if (current.value !== expectedValue || current.rawLine !== managedLine) {
+  if (current.value !== expectedValue
+    || current.rawLine === undefined
+    || !allowedRawLines.includes(current.rawLine)) {
     throw new Error(
       `Codex [features].${key} changed after setup; refusing to overwrite the user's newer value`,
     );
@@ -629,8 +633,9 @@ export function restoreBooleanFeature(
   expectedValue: "true" | "false",
   managedLine: string,
   previous: PreviousFeatureAssignment,
+  allowedRawLines: readonly string[] = [managedLine],
 ): string {
-  verifyInstalledBooleanFeature(text, key, expectedValue, managedLine);
+  verifyInstalledBooleanFeature(text, key, expectedValue, managedLine, allowedRawLines);
   const document = parseDocument(text);
   const current = findFeatureAssignment(document.lines, key);
   if (current.index === undefined) throw new Error(`Managed Codex ${key} is missing`);
@@ -723,7 +728,13 @@ export function verifyCompatibilityV1Features(
   previousMultiAgentV2: PreviousFeatureAssignment,
   installedAgentMaxDepth: number,
 ): void {
-  verifyInstalledBooleanFeature(text, "multi_agent", "true", MANAGED_MULTI_AGENT_LINE);
+  verifyInstalledBooleanFeature(
+    text,
+    "multi_agent",
+    "true",
+    MANAGED_MULTI_AGENT_LINE,
+    [MANAGED_MULTI_AGENT_LINE, NATIVE_NORMALIZED_MULTI_AGENT_LINE],
+  );
   verifyInstalledMultiAgentV2Feature(text, previousMultiAgentV2);
   const depth = findAgentMaxDepthAssignment(splitLines(text));
   if (depth.value !== String(installedAgentMaxDepth)
@@ -747,6 +758,7 @@ export function restoreCompatibilityV1Features(
     "true",
     MANAGED_MULTI_AGENT_LINE,
     previousMultiAgent,
+    [MANAGED_MULTI_AGENT_LINE, NATIVE_NORMALIZED_MULTI_AGENT_LINE],
   );
   restored = restoreCompatibilityV1AgentDepth(
     restored,

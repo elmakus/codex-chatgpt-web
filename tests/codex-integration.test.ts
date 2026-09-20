@@ -244,6 +244,71 @@ describe("reversible native Codex route integration", () => {
     expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 
+  test("Compatibility V1 accepts Codex-native multi_agent comment normalization and restores an absent baseline", () => {
+    const { codexHome } = fixture();
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(configPath, original);
+
+    installCodexIntegration(compatibilityV1Config("browser-only"));
+    const normalized = readFileSync(configPath, "utf8").replace(
+      MANAGED_MULTI_AGENT_LINE,
+      "multi_agent = true",
+    );
+    writeFileSync(configPath, normalized);
+
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(deactivateCodexIntegration()).toEqual({ changed: true, active: false });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+
+    expect(activateCodexIntegration()).toEqual({ changed: true, active: true });
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, "multi_agent = true"),
+    );
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(uninstallCodexIntegration()).toEqual({ changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("Compatibility V1 restores an exact prior multi_agent line after native comment normalization", () => {
+    const { codexHome } = fixture();
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.6-sol"\n\n[features]\nmulti_agent = false # user choice\n';
+    writeFileSync(configPath, original);
+
+    installCodexIntegration(compatibilityV1Config("browser-only"));
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, "multi_agent = true"),
+    );
+
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(uninstallCodexIntegration()).toEqual({ changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("Compatibility V1 still rejects non-native multi_agent ownership mutations", () => {
+    for (const replacement of [
+      "multi_agent = false",
+      "multi_agent = true # user changed",
+      "multi_agent = true\nmulti_agent = true",
+    ]) {
+      const { codexHome } = fixture();
+      const configPath = join(codexHome, "config.toml");
+      writeFileSync(configPath, 'model = "gpt-5.6-sol"\n');
+      installCodexIntegration(compatibilityV1Config("browser-only"));
+      writeFileSync(
+        configPath,
+        readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, replacement),
+      );
+
+      const status = inspectCodexIntegration();
+      expect(status.errors.length).toBeGreaterThan(0);
+      expect(() => deactivateCodexIntegration()).toThrow();
+    }
+  });
+
   test("Compatibility V1 preserves a structured multi_agent_v2 table", () => {
     const { codexHome } = fixture();
     const configPath = join(codexHome, "config.toml");
