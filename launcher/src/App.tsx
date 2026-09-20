@@ -434,6 +434,9 @@ function LauncherShell({
     const reminderTime = reminderAt === null ? Number.NaN : Date.parse(reminderAt);
     if (snapshot.state.browserInteractionMode !== "automatic"
       || browser?.authenticated !== true
+      || browser.status === "running"
+      || browser.status === "testing"
+      || browser.loading
       || !Number.isFinite(reminderTime)) {
       setSessionReminderDue(false);
       return;
@@ -468,6 +471,8 @@ function LauncherShell({
     };
   }, [
     browser?.authenticated,
+    browser?.loading,
+    browser?.status,
     snapshot.state.browserInteractionMode,
     snapshot.state.sessionRefreshReminderAt,
     setError,

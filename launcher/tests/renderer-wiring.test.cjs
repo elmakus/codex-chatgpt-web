@@ -396,6 +396,7 @@ test("due session reminders auto-refresh through the bounded launcher IPC", () =
   assert.match(electronMain, /refreshDueSessionReminder\(\{ browserHost, stateStore \}\)/);
   assert.match(electronMain, /if \(result\.refreshed\) send\("launcher:state-changed", result\.state\)/);
   assert.match(appSource, /sessionAutoRefreshAttemptRef/);
+  assert.match(appSource, /browser\.status === "running"/);
   assert.match(appSource, /api!\.refreshSessionReminder\(\)/);
   assert.match(appSource, /result\.attempted && !result\.refreshed && result\.browser\.authenticated/);
 });
