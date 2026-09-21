@@ -9,7 +9,7 @@ import {
   CHATGPT_WEB_MODEL_ROUTES,
   resolveChatGptWebContextLimits,
 } from "../src/chatgpt-web-models";
-import { augmentNativeModelCatalog } from "../src/model-catalog";
+import { augmentNativeModelCatalog, mergeMuseNativeModelCatalog } from "../src/model-catalog";
 
 function source(): Record<string, unknown> {
   return {
@@ -351,5 +351,74 @@ describe("native /models augmentation", () => {
         tool_mode: null,
       }],
     }, defaultConfig("full"))).toThrow("no list-visible, tool-capable model");
+  });
+});
+
+
+describe("Muse catalog normalization", () => {
+  test("normalizes OpenAI-compatible CLIProxyAPI data/id rows and imports only Muse models", () => {
+    const config = defaultConfig("full");
+    config.subagentProtocol = "native";
+    const augmented = augmentNativeModelCatalog(source(), config);
+    const result = mergeMuseNativeModelCatalog(augmented, {
+      object: "list",
+      data: [
+        { id: "muse-spark-1.3", object: "model", created: 1, owned_by: "muse" },
+        { id: "claude-sonnet", object: "model", created: 2, owned_by: "other" },
+        { id: "muse-spark-1.3", object: "model", created: 3, owned_by: "muse" },
+      ],
+    });
+    const models = result.models as Array<Record<string, unknown>>;
+    const muse = models.filter(model => String(model.slug).startsWith("muse-"));
+
+    expect(muse).toHaveLength(1);
+    expect(muse[0]).toMatchObject({
+      slug: "muse-spark-1.3",
+      display_name: "muse-spark-1.3",
+      visibility: "list",
+      supported_in_api: true,
+      priority: 99,
+      supported_reasoning_levels: [],
+      shell_type: "shell_command",
+      tool_mode: null,
+      multi_agent_version: null,
+      input_modalities: ["text"],
+      experimental_supported_tools: [],
+    });
+    expect(muse[0]).not.toHaveProperty("context_window");
+    expect(muse[0]).not.toHaveProperty("max_context_window");
+    expect(muse[0]).not.toHaveProperty("auto_compact_token_limit");
+    expect(muse[0]).not.toHaveProperty("comp_hash");
+    expect(models.some(model => model.slug === "claude-sonnet")).toBe(false);
+    expect(models.at(-1)?.slug).toBe("chatgpt-web/high");
+  });
+
+  test("preserves the existing Codex-shaped models/slug Muse catalog form", () => {
+    const augmented = augmentNativeModelCatalog(source(), defaultConfig("full"));
+    const result = mergeMuseNativeModelCatalog(augmented, {
+      models: [{
+        slug: "muse-spark-1.3",
+        display_name: "Muse Spark 1.3",
+        visibility: "list",
+        supported_in_api: true,
+        supported_reasoning_levels: [{ effort: "high", description: "High" }],
+        tool_mode: "code_mode_only",
+      }],
+    });
+    const muse = (result.models as Array<Record<string, unknown>>)
+      .find(model => model.slug === "muse-spark-1.3");
+
+    expect(muse).toMatchObject({
+      slug: "muse-spark-1.3",
+      display_name: "Muse Spark 1.3",
+      supported_reasoning_levels: [{ effort: "high", description: "High" }],
+      tool_mode: "code_mode_only",
+    });
+  });
+
+  test("rejects an unrecognized Muse catalog shape", () => {
+    const augmented = augmentNativeModelCatalog(source(), defaultConfig("full"));
+    expect(() => mergeMuseNativeModelCatalog(augmented, { object: "list" }))
+      .toThrow("missing a models or data array");
   });
 });
