@@ -154,10 +154,11 @@ function locateCodexInterruptHook(
   // The native TOML writer can insert unrelated tables between the hook and its trust state.
   // Locate the two owned definitions separately, retaining exact command/field matching.
   //
-  // Current Codex may normalize an enabled command hook by materializing `enabled = true`
-  // immediately after the managed hook fields. That field is semantically equivalent to the
-  // installed default and does not change the command identity/trusted hash. Tolerate only that
-  // exact native normalization and include it in the owned range so restore removes it too.
+  // Current Codex may materialize the native command-hook enablement field immediately after
+  // the managed hook fields. Ordinary verification tolerates only `enabled = true`, which is
+  // semantically equivalent to the installed default. Explicit recovery may additionally recognize
+  // `enabled = false` on an otherwise exact owned hook so restore can reinstall the canonical hook.
+  // Include only the recognized native field in the owned range so restore removes it too.
   let nativeEnabledNormalization = false;
   const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map((fragment, index) => {
     const pattern = new RegExp(hookTextPattern(fragment), "g");
