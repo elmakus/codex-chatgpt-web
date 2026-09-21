@@ -782,6 +782,50 @@ describe("reversible native Codex route integration", () => {
     }
   });
 
+  test("explicit setup repairs only a Codex-native disabled managed Interrupt hook", () => {
+    for (const ending of ["\n", "\r\n"]) {
+      const { codexHome } = fixture();
+      const configPath = join(codexHome, "config.toml");
+      const original = [
+        'model = "gpt-5.6-sol"',
+        "", "[mcp_servers.user_tool]", 'command = "user-tool-never-executed"', "",
+      ].join(ending);
+      writeFileSync(configPath, original);
+      const config = nativeConfig("full");
+      saveConfig(config);
+      const installed = installCodexIntegration(config);
+      const active = readFileSync(configPath, "utf8");
+      const disabled = active.replace(
+        `timeout = 3${ending}${ending}`,
+        `timeout = 3${ending}${ending}enabled = false${ending}`,
+      );
+      writeFileSync(configPath, disabled);
+      const journal = readFileSync(getCodexJournalPath(), "utf8");
+      const recovery = readFileSync(getCodexJournalRecoveryPath(), "utf8");
+
+      expect(inspectCodexIntegration().errors.length).toBeGreaterThan(0);
+      expect(() => preflightCodexIntegration(config)).toThrow("changed after setup");
+      expect(() => installCodexIntegration(config)).toThrow("changed after setup");
+      expect(() => preflightCodexIntegration(config, { replaceExistingRoute: true })).not.toThrow();
+      expect(readFileSync(configPath, "utf8")).toBe(disabled);
+      expect(readFileSync(getCodexJournalPath(), "utf8")).toBe(journal);
+      expect(readFileSync(getCodexJournalRecoveryPath(), "utf8")).toBe(recovery);
+
+      const repaired = installCodexIntegration(config, { replaceExistingRoute: true });
+      const repairedText = readFileSync(configPath, "utf8");
+      expect(repaired.interruptHook).toMatchObject({
+        command: installed.interruptHook.command,
+        stateKey: installed.interruptHook.stateKey,
+        trustedHash: installed.interruptHook.trustedHash,
+      });
+      expect(repairedText).not.toContain(`enabled = false${ending}`);
+      expect(repairedText).toContain(repaired.interruptHook.fragment);
+      expect(inspectCodexIntegration().errors).toEqual([]);
+      uninstallCodexIntegration();
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
+  });
+
   test("explicit setup still refuses changed hooks, partial removal and invalid config", () => {
     const { codexHome } = fixture();
     const configPath = join(codexHome, "config.toml");
@@ -795,6 +839,7 @@ describe("reversible native Codex route integration", () => {
     const recovery = readFileSync(getCodexJournalRecoveryPath(), "utf8");
     for (const current of [
       active.replace("timeout = 3", "timeout = 2"),
+      active.replace("timeout = 3", "timeout = 2\nenabled = false"),
       active.replace(/^#.*interrupt.*\n/gm, ""),
       withoutHook + installed.interruptHook.fragment.split("[[hooks.Interrupt]]")[0],
       withoutHook + `\n[hooks.state.${JSON.stringify(installed.interruptHook.stateKey)}]\ntrusted_hash = ${JSON.stringify(installed.interruptHook.trustedHash)}\n`,
