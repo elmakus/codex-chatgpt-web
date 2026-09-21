@@ -5,7 +5,7 @@ import {
   decodeCompactionSummary,
 } from "./responses/compaction";
 import { BRIDGE_REASONING_PREFIX } from "./responses/reasoning-envelope";
-import { fetchNativeCodex } from "./native-network";
+import { fetchNativeCodex, isMuseNativeModel } from "./native-network";
 
 const CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
 const FIRST_PARTY_CODEX_ORIGINATORS = new Set([
@@ -128,6 +128,29 @@ export function scrubBridgeArtifactsForNative(value: unknown): { value: unknown;
   return { value: clean, changed: true };
 }
 
+const MUSE_GMAIL_NAMESPACE = "mcp__codex_apps__gmail";
+
+function omitMuseGmailNamespace(
+  value: unknown,
+  endpoint: NativeCodexEndpoint,
+  model: string | undefined,
+): { value: unknown; changed: boolean } {
+  if (endpoint !== "responses"
+    || !isMuseNativeModel(model)
+    || !isObject(value)
+    || !Array.isArray(value.tools)) {
+    return { value, changed: false };
+  }
+
+  const tools = value.tools.filter(tool => !(
+    isObject(tool)
+    && tool.type === "namespace"
+    && tool.name === MUSE_GMAIL_NAMESPACE
+  ));
+  if (tools.length === value.tools.length) return { value, changed: false };
+  return { value: { ...value, tools }, changed: true };
+}
+
 function endToEndHeaders(source: Headers): Headers {
   const headers = new Headers();
   for (const [name, value] of source) {
@@ -242,8 +265,9 @@ export async function forwardNativeCodexRequest(
       const tail = Array.isArray(parsedBody.input) ? parsedBody.input.at(-1) : undefined;
       compactionRequest ||= endpoint === "responses" && isObject(tail) && tail.type === "compaction_trigger";
     }
-    const scrubbed = scrubBridgeArtifactsForNative(parsedBody);
-    if (scrubbed.changed) {
+    const museTools = omitMuseGmailNamespace(parsedBody, endpoint, model);
+    const scrubbed = scrubBridgeArtifactsForNative(museTools.value);
+    if (museTools.changed || scrubbed.changed) {
       headers.delete("content-encoding");
       body = JSON.stringify(scrubbed.value);
     } else {
