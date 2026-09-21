@@ -130,7 +130,7 @@ export function scrubBridgeArtifactsForNative(value: unknown): { value: unknown;
 
 const MUSE_GMAIL_NAMESPACE = "mcp__codex_apps__gmail";
 
-function omitMuseGmailNamespace(
+function normalizeMuseTools(
   value: unknown,
   endpoint: NativeCodexEndpoint,
   model: string | undefined,
@@ -142,12 +142,28 @@ function omitMuseGmailNamespace(
     return { value, changed: false };
   }
 
-  const tools = value.tools.filter(tool => !(
-    isObject(tool)
-    && tool.type === "namespace"
-    && tool.name === MUSE_GMAIL_NAMESPACE
-  ));
-  if (tools.length === value.tools.length) return { value, changed: false };
+  const tools: unknown[] = [];
+  let changed = false;
+  for (const tool of value.tools) {
+    if (isObject(tool)
+      && tool.type === "namespace"
+      && tool.name === MUSE_GMAIL_NAMESPACE) {
+      changed = true;
+      continue;
+    }
+    if (isObject(tool)
+      && tool.type === "web_search"
+      && Object.prototype.hasOwnProperty.call(tool, "search_content_types")) {
+      const normalizedTool = { ...tool };
+      delete normalizedTool.search_content_types;
+      tools.push(normalizedTool);
+      changed = true;
+      continue;
+    }
+    tools.push(tool);
+  }
+
+  if (!changed) return { value, changed: false };
   return { value: { ...value, tools }, changed: true };
 }
 
@@ -265,7 +281,7 @@ export async function forwardNativeCodexRequest(
       const tail = Array.isArray(parsedBody.input) ? parsedBody.input.at(-1) : undefined;
       compactionRequest ||= endpoint === "responses" && isObject(tail) && tail.type === "compaction_trigger";
     }
-    const museTools = omitMuseGmailNamespace(parsedBody, endpoint, model);
+    const museTools = normalizeMuseTools(parsedBody, endpoint, model);
     const scrubbed = scrubBridgeArtifactsForNative(museTools.value);
     if (museTools.changed || scrubbed.changed) {
       headers.delete("content-encoding");
