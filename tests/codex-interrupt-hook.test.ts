@@ -90,9 +90,24 @@ test("accepts native enabled=true normalization without weakening managed hook o
     verifyCodexInterruptHook(normalized, installed.installed);
     expect(restoreCodexInterruptHook(normalized, installed.installed)).toBe(original);
 
+    const disabled = normalized.replace("enabled = true", "enabled = false");
     expect(() => verifyCodexInterruptHook(
-      normalized.replace("enabled = true", "enabled = false"),
+      disabled,
       installed.installed,
+    )).toThrow("changed after setup");
+    expect(() => restoreCodexInterruptHook(
+      disabled,
+      installed.installed,
+    )).toThrow("changed after setup");
+    expect(restoreCodexInterruptHook(
+      disabled,
+      installed.installed,
+      { allowNativeDisabled: true },
+    )).toBe(original);
+    expect(() => restoreCodexInterruptHook(
+      disabled.replace("timeout = 3", "timeout = 2"),
+      installed.installed,
+      { allowNativeDisabled: true },
     )).toThrow("changed after setup");
     expect(() => restoreCodexInterruptHook(
       normalized.replace(
