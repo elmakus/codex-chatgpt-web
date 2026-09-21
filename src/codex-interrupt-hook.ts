@@ -136,7 +136,11 @@ function hookTextPattern(text: string): string {
     .join("(?:\\r\\n|\\n|\\r)");
 }
 
-function locateCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): Array<{
+function locateCodexInterruptHook(
+  text: string,
+  installed: InstalledCodexInterruptHook,
+  options: { allowNativeDisabled?: boolean } = {},
+): Array<{
   start: number; end: number;
 }> {
   const marker = installed.fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
@@ -150,10 +154,11 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   // The native TOML writer can insert unrelated tables between the hook and its trust state.
   // Locate the two owned definitions separately, retaining exact command/field matching.
   //
-  // Current Codex may normalize an enabled command hook by materializing `enabled = true`
-  // immediately after the managed hook fields. That field is semantically equivalent to the
-  // installed default and does not change the command identity/trusted hash. Tolerate only that
-  // exact native normalization and include it in the owned range so restore removes it too.
+  // Current Codex may materialize the native command-hook enablement field immediately after
+  // the managed hook fields. Ordinary verification tolerates only `enabled = true`, which is
+  // semantically equivalent to the installed default. Explicit recovery may additionally recognize
+  // `enabled = false` on an otherwise exact owned hook so restore can reinstall the canonical hook.
+  // Include only the recognized native field in the owned range so restore removes it too.
   let nativeEnabledNormalization = false;
   const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map((fragment, index) => {
     const pattern = new RegExp(hookTextPattern(fragment), "g");
@@ -163,10 +168,13 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     }
     let end = match.index + match[0].length;
     if (index === 0) {
-      const enabled = /^(?:enabled = true)(?:\r\n|\n|\r)/.exec(text.slice(end));
+      const enabled = /^enabled = (true|false)(?:\r\n|\n|\r)/.exec(text.slice(end));
       if (enabled) {
-        nativeEnabledNormalization = true;
-        end += enabled[0].length;
+        const enabledValue = enabled[1] === "true";
+        if (enabledValue || options.allowNativeDisabled === true) {
+          nativeEnabledNormalization = true;
+          end += enabled[0].length;
+        }
       }
     }
     return { start: match.index, end };
@@ -195,7 +203,7 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
       const commands = normalized.hooks;
       if (Array.isArray(commands) && commands[0] && typeof commands[0] === "object" && !Array.isArray(commands[0])) {
         const command = { ...(commands[0] as Record<string, unknown>) };
-        if (command.enabled === true) delete command.enabled;
+        if (typeof command.enabled === "boolean") delete command.enabled;
         normalized.hooks = [command, ...commands.slice(1)];
       }
       interrupt = normalized;
@@ -235,7 +243,7 @@ export function verifyCodexInterruptHook(text: string, installed: InstalledCodex
 export function restoreCodexInterruptHook(
   text: string,
   installed: InstalledCodexInterruptHook,
-  options: { allowAbsent?: boolean } = {},
+  options: { allowAbsent?: boolean; allowNativeDisabled?: boolean } = {},
 ): string {
   // Explicit Setup can reinstall a fully removed hook. A stale journal alone does not mean
   // there is still a definition to remove; partial edits must retain the strict checks below.
@@ -248,7 +256,9 @@ export function restoreCodexInterruptHook(
         && !Object.hasOwn(state, installed.stateKey))) return text;
     }
   }
-  const owned = locateCodexInterruptHook(text, installed).sort((left, right) => right.start - left.start);
+  const owned = locateCodexInterruptHook(text, installed, {
+    allowNativeDisabled: options.allowNativeDisabled,
+  }).sort((left, right) => right.start - left.start);
   for (const range of owned) text = text.slice(0, range.start) + text.slice(range.end);
   return text;
 }

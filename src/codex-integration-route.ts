@@ -184,7 +184,10 @@ export function replacementBaseline(
 
   if (journal.version === 9 || journal.version === 10) {
     const withoutHook = journal.version === 10
-      ? restoreCodexInterruptHook(currentText, journal.interruptHook, { allowAbsent: true })
+      ? restoreCodexInterruptHook(currentText, journal.interruptHook, {
+          allowAbsent: true,
+          allowNativeDisabled: true,
+        })
       : currentText;
     const baseline = restoreOwnedManagedFeatures(withoutHook, journal);
     const document = parseDocument(baseline);
