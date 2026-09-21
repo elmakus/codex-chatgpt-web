@@ -205,10 +205,11 @@ function openAiModelId(value: unknown): string | undefined {
 
 function buildOpenAiMuseModel(templateValue: unknown, modelId: string): JsonObject {
   const template = templateValue && typeof templateValue === "object" && !Array.isArray(templateValue)
-    ? structuredClone(templateValue as JsonObject)
+    ? templateValue as JsonObject
     : {};
-  const model: JsonObject = {
-    ...template,
+  // The OpenAI-compatible catalog only supplies model identity. Publish a conservative Codex
+  // descriptor rather than copying native-model context or capability claims.
+  return {
     slug: modelId,
     display_name: modelId,
     description: "Muse via CLIProxyAPI",
@@ -217,14 +218,16 @@ function buildOpenAiMuseModel(templateValue: unknown, modelId: string): JsonObje
     shell_type: typeof template.shell_type === "string" ? template.shell_type : "shell_command",
     visibility: "list",
     supported_in_api: true,
-    // Match Codex's unknown-model fallback ordering without claiming a provider-specific rank.
     priority: 99,
     additional_speed_tiers: [],
     service_tiers: [],
     default_service_tier: null,
     availability_nux: null,
     upgrade: null,
+    supports_reasoning_summary_parameter: false,
     support_verbosity: false,
+    default_verbosity: null,
+    apply_patch_tool_type: null,
     truncation_policy: { mode: "bytes", limit: 10_000 },
     experimental_supported_tools: [],
     input_modalities: ["text"],
@@ -236,17 +239,6 @@ function buildOpenAiMuseModel(templateValue: unknown, modelId: string): JsonObje
     multi_agent_version: null,
     multi_agent_reasoning_effort: null,
   };
-  // The OpenAI-compatible /v1/models row carries identity only. Do not inherit native-model
-  // context/compaction or account-access claims that CLIProxyAPI did not advertise for Muse.
-  delete model.comp_hash;
-  delete model.context_window;
-  delete model.max_context_window;
-  delete model.auto_compact_token_limit;
-  delete model.effective_context_window_percent;
-  delete model.available_access_programs;
-  delete model.auto_review_model_override;
-  delete model.model_specialty;
-  return model;
 }
 
 function museCatalogRows(museCatalog: JsonObject, templateValue: unknown): JsonObject[] {
