@@ -69,6 +69,15 @@ function recursiveGmailNamespace(): Record<string, unknown> {
   };
 }
 
+function multimodalWebSearchTool(): Record<string, unknown> {
+  return {
+    type: "web_search",
+    search_context_size: "medium",
+    search_content_types: ["text", "image"],
+    user_location: { type: "approximate", country: "CH", city: "Zurich" },
+  };
+}
+
 function encodedNativeRequest(body: Record<string, unknown>): { request: Request; encoded: ArrayBuffer } {
   const compressed = Bun.zstdCompressSync(Buffer.from(JSON.stringify(body)));
   const encoded = new ArrayBuffer(compressed.byteLength);
@@ -204,7 +213,87 @@ test("removes only the Gmail namespace from zstd-compressed Muse Responses reque
   expect(forwarded.tools).toEqual([preservedFunction, preservedNamespace]);
 });
 
-test("keeps the Gmail namespace byte-for-byte on ordinary native zstd Responses requests", async () => {
+test("removes only search_content_types from Muse web_search and composes with Gmail omission", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const preservedFunction = {
+    type: "function",
+    name: "exec_command",
+    description: "Run a command",
+    parameters: { type: "object", properties: { cmd: { type: "string" } } },
+  };
+  const preservedNamespace = {
+    type: "namespace",
+    name: "mcp__codex_apps__calendar",
+    description: "Calendar tools",
+    tools: [{ name: "list_events", inputSchema: { type: "object", properties: {} } }],
+  };
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [
+      preservedFunction,
+      multimodalWebSearchTool(),
+      recursiveGmailNamespace(),
+      preservedNamespace,
+    ],
+  };
+  const { request } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBeNull();
+  const forwarded = await routed!.json() as { tools: unknown[] };
+  expect(forwarded.tools).toEqual([
+    preservedFunction,
+    {
+      type: "web_search",
+      search_context_size: "medium",
+      user_location: { type: "approximate", country: "CH", city: "Zurich" },
+    },
+    preservedNamespace,
+  ]);
+});
+
+test("does not rewrite web_search_preview on Muse when no compatibility rewrite is needed", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [{
+      type: "web_search_preview",
+      search_context_size: "medium",
+      search_content_types: ["text", "image"],
+    }],
+  };
+  const { request, encoded } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
+});
+
+test("keeps Gmail and web-search shape byte-for-byte on ordinary native zstd Responses requests", async () => {
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
   process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
   process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
@@ -214,7 +303,7 @@ test("keeps the Gmail namespace byte-for-byte on ordinary native zstd Responses 
     model: "gpt-5.6-sol",
     input: "hello",
     stream: true,
-    tools: [recursiveGmailNamespace()],
+    tools: [recursiveGmailNamespace(), multimodalWebSearchTool()],
   };
   const { request, encoded } = encodedNativeRequest(body);
   let routed: Request | undefined;
