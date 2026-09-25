@@ -115,6 +115,51 @@ test("Interrupt hook trust hash is deterministic and changes with its exact comm
   expect(codexInterruptHookHash("'other-runtime' 'hook' 'interrupt'")).not.toBe(first);
 });
 
+test("accepts native enabled=true normalization without weakening managed hook ownership", () => {
+  for (const ending of ["\n", "\r\n"]) {
+    const original = 'model = "gpt-5.6-sol"\n'.replaceAll("\n", ending);
+    const installed = installCodexInterruptHook(
+      original,
+      "/Users/test/.codex/config.toml",
+      { runtimeCommand: ["/opt/runtime"] },
+    );
+    const normalized = installed.text.replace(
+      `timeout = 3${ending}${ending}`,
+      `timeout = 3${ending}${ending}enabled = true${ending}`,
+    );
+
+    verifyCodexInterruptHook(normalized, installed.installed);
+    expect(restoreCodexInterruptHook(normalized, installed.installed)).toBe(original);
+
+    const disabled = normalized.replace("enabled = true", "enabled = false");
+    expect(() => verifyCodexInterruptHook(
+      disabled,
+      installed.installed,
+    )).toThrow("changed after setup");
+    expect(() => restoreCodexInterruptHook(
+      disabled,
+      installed.installed,
+    )).toThrow("changed after setup");
+    expect(restoreCodexInterruptHook(
+      disabled,
+      installed.installed,
+      { allowNativeDisabled: true },
+    )).toBe(original);
+    expect(() => restoreCodexInterruptHook(
+      disabled.replace("timeout = 3", "timeout = 2"),
+      installed.installed,
+      { allowNativeDisabled: true },
+    )).toThrow("changed after setup");
+    expect(() => restoreCodexInterruptHook(
+      normalized.replace(
+        `enabled = true${ending}`,
+        `enabled = true${ending}approved = true${ending}`,
+      ),
+      installed.installed,
+    )).toThrow("changed after setup");
+  }
+});
+
 test("refuses to remove a modified or duplicated managed hook", () => {
   const original = 'model = "gpt-5.6-sol"\n';
   const installed = installCodexInterruptHook(

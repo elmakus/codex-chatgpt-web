@@ -195,7 +195,11 @@ function removeRanges(text: string, ranges: SourceRange[]): string {
   return text;
 }
 
-function locateCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): SourceRange[] {
+function locateCodexInterruptHook(
+  text: string,
+  installed: InstalledCodexInterruptHook,
+  options: { allowNativeDisabled?: boolean } = {},
+): SourceRange[] {
   const changed = () => new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
   if (codexInterruptHookHash(installed.command) !== installed.trustedHash) {
     throw new Error("Codex interrupt lifecycle hook journal hash is invalid");
@@ -206,6 +210,16 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   const expectedGroup = { hooks: [{ type: "command", command: installed.command, timeout: 3 }] };
   const expectedState = { trusted_hash: installed.trustedHash };
   const equal = (left: unknown, right: unknown) => JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+  const normalizedNativeGroup = (value: unknown): unknown => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const normalized = structuredClone(value as Record<string, unknown>);
+    const hooks = normalized.hooks;
+    if (!Array.isArray(hooks) || !hooks[0] || typeof hooks[0] !== "object" || Array.isArray(hooks[0])) return normalized;
+    const command = { ...(hooks[0] as Record<string, unknown>) };
+    if (command.enabled === true || (command.enabled === false && options.allowNativeDisabled === true)) delete command.enabled;
+    normalized.hooks = [command, ...hooks.slice(1)];
+    return normalized;
+  };
   try {
     const journal = parseHookDocument(installed.fragment);
     if (!equal(journal.hooks?.Interrupt, [expectedGroup])
@@ -218,8 +232,8 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     throw changed();
   }
   const groups = document.hooks?.Interrupt;
-  if (!Array.isArray(groups) || !equal(groups[installed.groupIndex], expectedGroup)) {
-    if (Array.isArray(groups) && groups.some(group => equal(group, expectedGroup))) {
+  if (!Array.isArray(groups) || !equal(normalizedNativeGroup(groups[installed.groupIndex]), expectedGroup)) {
+    if (Array.isArray(groups) && groups.some(group => equal(normalizedNativeGroup(group), expectedGroup))) {
       throw new Error("Codex interrupt lifecycle hook order changed after setup; refusing to overwrite it");
     }
     throw changed();
@@ -338,7 +352,7 @@ export function verifyCodexInterruptHook(text: string, installed: InstalledCodex
 export function restoreCodexInterruptHook(
   text: string,
   installed: InstalledCodexInterruptHook,
-  options: { allowAbsent?: boolean } = {},
+  options: { allowAbsent?: boolean; allowNativeDisabled?: boolean } = {},
 ): string {
   // Explicit Setup can reinstall a fully removed hook. A stale journal alone does not mean
   // there is still a definition to remove; partial edits must retain the strict checks below.
@@ -351,7 +365,9 @@ export function restoreCodexInterruptHook(
         && !Object.hasOwn(state, installed.stateKey))) return text;
     }
   }
-  const owned = locateCodexInterruptHook(text, installed).sort((left, right) => right.start - left.start);
+  const owned = locateCodexInterruptHook(text, installed, {
+    allowNativeDisabled: options.allowNativeDisabled,
+  }).sort((left, right) => right.start - left.start);
   for (const range of owned) text = text.slice(0, range.start) + text.slice(range.end);
   return text;
 }

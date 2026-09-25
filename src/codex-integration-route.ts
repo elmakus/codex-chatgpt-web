@@ -5,6 +5,7 @@ import {
   MANAGED_COMMENT,
   MANAGED_ROUTE_COMMENT,
   MANAGED_MULTI_AGENT_LINE,
+  NATIVE_NORMALIZED_MULTI_AGENT_LINE,
   MANAGED_REMOTE_COMPACTION_LINE,
   managedAgentMaxDepthLine,
 } from "./codex-integration-shared";
@@ -92,13 +93,16 @@ function restoreOwnedManagedFeatures(text: string, journal: ManagedRouteJournal)
         restored = restoreMultiAgentV2Feature(restored, evidence.previousMultiAgentV2);
       }
       const multiAgent = findFeatureAssignment(splitLines(restored), "multi_agent");
-      if (multiAgent.rawLine === MANAGED_MULTI_AGENT_LINE && multiAgent.value === "true") {
+      if ((multiAgent.rawLine === MANAGED_MULTI_AGENT_LINE
+        || multiAgent.rawLine === NATIVE_NORMALIZED_MULTI_AGENT_LINE)
+        && multiAgent.value === "true") {
         restored = restoreBooleanFeature(
           restored,
           "multi_agent",
           "true",
           MANAGED_MULTI_AGENT_LINE,
           evidence.previousMultiAgent,
+          [MANAGED_MULTI_AGENT_LINE, NATIVE_NORMALIZED_MULTI_AGENT_LINE],
         );
       }
     }
@@ -193,7 +197,10 @@ export function replacementBaseline(
 
   if (journal.version === 9 || journal.version === 10) {
     const withoutHook = journal.version === 10
-      ? restoreCodexInterruptHook(currentText, journal.interruptHook, { allowAbsent: true })
+      ? restoreCodexInterruptHook(currentText, journal.interruptHook, {
+          allowAbsent: true,
+          allowNativeDisabled: true,
+        })
       : currentText;
     const baseline = restoreOwnedManagedFeatures(withoutHook, journal);
     const document = parseDocument(baseline);

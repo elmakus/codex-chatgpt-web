@@ -5,7 +5,7 @@ import {
   decodeCompactionSummary,
 } from "./responses/compaction";
 import { BRIDGE_REASONING_PREFIX } from "./responses/reasoning-envelope";
-import { fetchNativeCodex } from "./native-network";
+import { fetchNativeCodex, isMuseNativeModel } from "./native-network";
 
 const CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
 const FIRST_PARTY_CODEX_ORIGINATORS = new Set([
@@ -27,7 +27,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "host",
 ]);
 
-export type NativeFetch = (request: Request) => Promise<Response>;
+export type NativeFetch = (request: Request, modelHint?: string) => Promise<Response>;
 export type NativeImageEndpoint = "images/generations" | "images/edits";
 export type NativeCodexEndpoint = "models" | "responses" | "responses/compact" | "alpha/search" | NativeImageEndpoint;
 
@@ -126,6 +126,45 @@ export function scrubBridgeArtifactsForNative(value: unknown): { value: unknown;
   const clean: JsonObject = { ...value, input };
   delete clean.previous_response_id;
   return { value: clean, changed: true };
+}
+
+const MUSE_GMAIL_NAMESPACE = "mcp__codex_apps__gmail";
+
+function normalizeMuseTools(
+  value: unknown,
+  endpoint: NativeCodexEndpoint,
+  model: string | undefined,
+): { value: unknown; changed: boolean } {
+  if (endpoint !== "responses"
+    || !isMuseNativeModel(model)
+    || !isObject(value)
+    || !Array.isArray(value.tools)) {
+    return { value, changed: false };
+  }
+
+  const tools: unknown[] = [];
+  let changed = false;
+  for (const tool of value.tools) {
+    if (isObject(tool)
+      && tool.type === "namespace"
+      && tool.name === MUSE_GMAIL_NAMESPACE) {
+      changed = true;
+      continue;
+    }
+    if (isObject(tool)
+      && tool.type === "web_search"
+      && Object.prototype.hasOwnProperty.call(tool, "search_content_types")) {
+      const normalizedTool = { ...tool };
+      delete normalizedTool.search_content_types;
+      tools.push(normalizedTool);
+      changed = true;
+      continue;
+    }
+    tools.push(tool);
+  }
+
+  if (!changed) return { value, changed: false };
+  return { value: { ...value, tools }, changed: true };
 }
 
 function endToEndHeaders(source: Headers): Headers {
@@ -242,8 +281,9 @@ export async function forwardNativeCodexRequest(
       const tail = Array.isArray(parsedBody.input) ? parsedBody.input.at(-1) : undefined;
       compactionRequest ||= endpoint === "responses" && isObject(tail) && tail.type === "compaction_trigger";
     }
-    const scrubbed = scrubBridgeArtifactsForNative(parsedBody);
-    if (scrubbed.changed) {
+    const museTools = normalizeMuseTools(parsedBody, endpoint, model);
+    const scrubbed = scrubBridgeArtifactsForNative(museTools.value);
+    if (museTools.changed || scrubbed.changed) {
       headers.delete("content-encoding");
       body = JSON.stringify(scrubbed.value);
     } else {
@@ -259,7 +299,7 @@ export async function forwardNativeCodexRequest(
     // forwarding account headers to a redirect destination.
     redirect: imageRequest ? "manual" : "follow",
   });
-  const upstream = await fetchUpstream(upstreamRequest);
+  const upstream = await fetchUpstream(upstreamRequest, model);
   if (compactionRequest && !upstream.ok) {
     console.warn(`[codex-chatgpt-web] native_compaction_upstream_failed ${JSON.stringify({
       endpoint, model, status: upstream.status,

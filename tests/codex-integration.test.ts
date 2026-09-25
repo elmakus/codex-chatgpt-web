@@ -244,6 +244,71 @@ describe("reversible native Codex route integration", () => {
     expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 
+  test("Compatibility V1 accepts Codex-native multi_agent comment normalization and restores an absent baseline", () => {
+    const { codexHome } = fixture();
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.6-sol"\n';
+    writeFileSync(configPath, original);
+
+    installCodexIntegration(compatibilityV1Config("browser-only"));
+    const normalized = readFileSync(configPath, "utf8").replace(
+      MANAGED_MULTI_AGENT_LINE,
+      "multi_agent = true",
+    );
+    writeFileSync(configPath, normalized);
+
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(deactivateCodexIntegration()).toEqual({ changed: true, active: false });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+
+    expect(activateCodexIntegration()).toEqual({ changed: true, active: true });
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, "multi_agent = true"),
+    );
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(uninstallCodexIntegration()).toEqual({ changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("Compatibility V1 restores an exact prior multi_agent line after native comment normalization", () => {
+    const { codexHome } = fixture();
+    const configPath = join(codexHome, "config.toml");
+    const original = 'model = "gpt-5.6-sol"\n\n[features]\nmulti_agent = false # user choice\n';
+    writeFileSync(configPath, original);
+
+    installCodexIntegration(compatibilityV1Config("browser-only"));
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, "multi_agent = true"),
+    );
+
+    expect(inspectCodexIntegration()).toMatchObject({ installed: true, active: true, errors: [] });
+    expect(uninstallCodexIntegration()).toEqual({ changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("Compatibility V1 still rejects non-native multi_agent ownership mutations", () => {
+    for (const replacement of [
+      "multi_agent = false",
+      "multi_agent = true # user changed",
+      "multi_agent = true\nmulti_agent = true",
+    ]) {
+      const { codexHome } = fixture();
+      const configPath = join(codexHome, "config.toml");
+      writeFileSync(configPath, 'model = "gpt-5.6-sol"\n');
+      installCodexIntegration(compatibilityV1Config("browser-only"));
+      writeFileSync(
+        configPath,
+        readFileSync(configPath, "utf8").replace(MANAGED_MULTI_AGENT_LINE, replacement),
+      );
+
+      const status = inspectCodexIntegration();
+      expect(status.errors.length).toBeGreaterThan(0);
+      expect(() => deactivateCodexIntegration()).toThrow();
+    }
+  });
+
   test("Compatibility V1 preserves a structured multi_agent_v2 table", () => {
     const { codexHome } = fixture();
     const configPath = join(codexHome, "config.toml");
@@ -722,6 +787,50 @@ describe("reversible native Codex route integration", () => {
     }
   });
 
+  test("explicit setup repairs only a Codex-native disabled managed Interrupt hook", () => {
+    for (const ending of ["\n", "\r\n"]) {
+      const { codexHome } = fixture();
+      const configPath = join(codexHome, "config.toml");
+      const original = [
+        'model = "gpt-5.6-sol"',
+        "", "[mcp_servers.user_tool]", 'command = "user-tool-never-executed"', "",
+      ].join(ending);
+      writeFileSync(configPath, original);
+      const config = nativeConfig("full");
+      saveConfig(config);
+      const installed = installCodexIntegration(config);
+      const active = readFileSync(configPath, "utf8");
+      const disabled = active.replace(
+        `timeout = 3${ending}${ending}`,
+        `timeout = 3${ending}${ending}enabled = false${ending}`,
+      );
+      writeFileSync(configPath, disabled);
+      const journal = readFileSync(getCodexJournalPath(), "utf8");
+      const recovery = readFileSync(getCodexJournalRecoveryPath(), "utf8");
+
+      expect(inspectCodexIntegration().errors.length).toBeGreaterThan(0);
+      expect(() => preflightCodexIntegration(config)).toThrow("changed after setup");
+      expect(() => installCodexIntegration(config)).toThrow("changed after setup");
+      expect(() => preflightCodexIntegration(config, { replaceExistingRoute: true })).not.toThrow();
+      expect(readFileSync(configPath, "utf8")).toBe(disabled);
+      expect(readFileSync(getCodexJournalPath(), "utf8")).toBe(journal);
+      expect(readFileSync(getCodexJournalRecoveryPath(), "utf8")).toBe(recovery);
+
+      const repaired = installCodexIntegration(config, { replaceExistingRoute: true });
+      const repairedText = readFileSync(configPath, "utf8");
+      expect(repaired.interruptHook).toMatchObject({
+        command: installed.interruptHook.command,
+        stateKey: installed.interruptHook.stateKey,
+        trustedHash: installed.interruptHook.trustedHash,
+      });
+      expect(repairedText).not.toContain(`enabled = false${ending}`);
+      expect(repairedText).toContain(repaired.interruptHook.fragment);
+      expect(inspectCodexIntegration().errors).toEqual([]);
+      uninstallCodexIntegration();
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
+  });
+
   test("explicit setup still refuses changed hooks, partial removal and invalid config", () => {
     const { codexHome } = fixture();
     const configPath = join(codexHome, "config.toml");
@@ -735,6 +844,7 @@ describe("reversible native Codex route integration", () => {
     const recovery = readFileSync(getCodexJournalRecoveryPath(), "utf8");
     for (const current of [
       active.replace("timeout = 3", "timeout = 2"),
+      active.replace("timeout = 3", "timeout = 2\nenabled = false"),
       withoutHook + installed.interruptHook.fragment.split("[[hooks.Interrupt]]")[0],
       withoutHook + `\n[hooks.state.${JSON.stringify(installed.interruptHook.stateKey)}]\ntrusted_hash = ${JSON.stringify(installed.interruptHook.trustedHash)}\n`,
       withoutHook + '\n[[hooks.Interrupt]]\n[[hooks.Interrupt.hooks]]\ntype = "command"\ncommand = "user-modified-hook"\n',

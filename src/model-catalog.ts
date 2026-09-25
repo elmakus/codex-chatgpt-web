@@ -206,3 +206,115 @@ export function augmentNativeModelCatalog(
     models: [...nativeModels, ...webModels],
   };
 }
+
+
+function openAiModelId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = (value as JsonObject).id;
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function buildOpenAiMuseModel(templateValue: unknown, modelId: string): JsonObject {
+  const template = templateValue && typeof templateValue === "object" && !Array.isArray(templateValue)
+    ? templateValue as JsonObject
+    : {};
+  // The OpenAI-compatible catalog only supplies model identity. Publish a conservative Codex
+  // descriptor rather than copying native-model context or capability claims.
+  return {
+    slug: modelId,
+    display_name: modelId,
+    description: "Muse via CLIProxyAPI",
+    default_reasoning_level: null,
+    supported_reasoning_levels: [],
+    shell_type: typeof template.shell_type === "string" ? template.shell_type : "shell_command",
+    visibility: "list",
+    supported_in_api: true,
+    priority: 99,
+    additional_speed_tiers: [],
+    service_tiers: [],
+    default_service_tier: null,
+    availability_nux: null,
+    upgrade: null,
+    supports_reasoning_summary_parameter: false,
+    support_verbosity: false,
+    default_verbosity: null,
+    apply_patch_tool_type: null,
+    truncation_policy: { mode: "bytes", limit: 10_000 },
+    experimental_supported_tools: [],
+    input_modalities: ["text"],
+    supports_search_tool: false,
+    supports_experimental_context: false,
+    use_responses_lite: false,
+    supports_reasoning_effort_updates: false,
+    tool_mode: null,
+    multi_agent_version: null,
+    multi_agent_reasoning_effort: null,
+  };
+}
+
+function museCatalogRows(museCatalog: JsonObject, templateValue: unknown): JsonObject[] {
+  if (Array.isArray(museCatalog.models)) {
+    return museCatalog.models
+      .map(candidate => {
+        const modelSlug = slug(candidate);
+        if (!modelSlug?.startsWith("muse-")) return undefined;
+        return structuredClone(object(candidate, `Muse native ${modelSlug} model`));
+      })
+      .filter((candidate): candidate is JsonObject => candidate !== undefined);
+  }
+
+  if (Array.isArray(museCatalog.data)) {
+    return museCatalog.data
+      .map(candidate => {
+        const modelId = openAiModelId(candidate);
+        if (!modelId?.startsWith("muse-")) return undefined;
+        return buildOpenAiMuseModel(templateValue, modelId);
+      })
+      .filter((candidate): candidate is JsonObject => candidate !== undefined);
+  }
+
+  throw new Error("Muse native models response is missing a models or data array");
+}
+
+/**
+ * Merge the optional Muse/CLIProxyAPI catalog beside the primary native catalog.
+ *
+ * CLIProxyAPI may expose providers other than Meta, so only public `muse-*` rows are imported.
+ * OpenAI-compatible `data[]/id` rows are normalized to Codex model metadata, while the existing
+ * Codex-shaped `models[]/slug` form remains accepted for compatibility. Existing Muse rows in
+ * the primary catalog are replaced, while ChatGPT Web rows remain last.
+ */
+export function mergeMuseNativeModelCatalog(value: unknown, museValue: unknown): JsonObject {
+  const catalog = object(value, "augmented native Codex models response");
+  const museCatalog = object(museValue, "Muse native models response");
+  if (!Array.isArray(catalog.models)) {
+    throw new Error("Augmented native Codex models response is missing a models array");
+  }
+
+  const template = catalog.models.find(candidate => {
+    const modelSlug = slug(candidate);
+    return modelSlug && !modelSlug.startsWith("muse-") && !modelSlug.startsWith(CHATGPT_WEB_MODEL_PREFIX);
+  });
+  const museModels: JsonObject[] = [];
+  const seen = new Set<string>();
+  for (const candidate of museCatalogRows(museCatalog, template)) {
+    const modelSlug = slug(candidate);
+    if (!modelSlug || seen.has(modelSlug)) continue;
+    seen.add(modelSlug);
+    museModels.push(candidate);
+  }
+
+  const primaryNative: unknown[] = [];
+  const webModels: unknown[] = [];
+  for (const candidate of catalog.models) {
+    const modelSlug = slug(candidate);
+    if (modelSlug?.startsWith("muse-")) continue;
+    if (modelSlug?.startsWith(CHATGPT_WEB_MODEL_PREFIX)) webModels.push(structuredClone(candidate));
+    else primaryNative.push(structuredClone(candidate));
+  }
+
+  return {
+    ...structuredClone(catalog),
+    models: [...primaryNative, ...museModels, ...webModels],
+  };
+}

@@ -5,6 +5,32 @@ const { releaseRetainedConversation } = require("./retained-turn-release.cjs");
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_MANUAL_START_BODY_BYTES = 3 * 1024 * 1024;
 const MANUAL_SENT_OBSERVER_TIMEOUT_MS = 35_000;
+const OFFICIAL_CODEX_PROXY_BASE = "https://chatgpt.com/backend-api/codex";
+
+function normalizedProxyResolutionBase(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if ((url.protocol !== "http:" && url.protocol !== "https:")
+      || url.username || url.password || url.search || url.hash) return null;
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function proxyResolutionTargetAllowed(url, configuredBases) {
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return false;
+  const bases = [OFFICIAL_CODEX_PROXY_BASE, ...configuredBases]
+    .map(normalizedProxyResolutionBase)
+    .filter(Boolean);
+  return bases.some((base) => {
+    if (url.origin !== base.origin) return false;
+    const path = base.pathname;
+    return url.pathname === path || url.pathname.startsWith(`${path}/`);
+  });
+}
 
 function secureTokenMatches(expected, authorization) {
   const prefix = "Bearer ";
@@ -38,12 +64,13 @@ function writeJson(response, status, body) {
 }
 
 class BrowserControlServer {
-  constructor({ logger, getBrowserHost, getPreferences, resolveProxy, limits }) {
+  constructor({ logger, getBrowserHost, getPreferences, resolveProxy, limits, proxyResolutionBases = [] }) {
     this.logger = logger;
     this.getBrowserHost = getBrowserHost;
     this.getPreferences = getPreferences;
     this.resolveProxy = resolveProxy;
     this.limits = limits;
+    this.proxyResolutionBases = Array.isArray(proxyResolutionBases) ? proxyResolutionBases : [];
     this.token = randomBytes(32).toString("base64url");
     this.port = 0;
     this.server = createServer((request, response) => {
@@ -121,8 +148,7 @@ class BrowserControlServer {
       );
       if (isProxyResolution) {
         const url = new URL(body?.url);
-        if (url.origin !== "https://chatgpt.com" || url.username || url.password
-          || !url.pathname.startsWith("/backend-api/codex/")) {
+        if (!proxyResolutionTargetAllowed(url, this.proxyResolutionBases)) {
           throw new Error("Proxy resolution is restricted to native Codex requests");
         }
         if (!this.resolveProxy) throw new Error("Native proxy resolver is unavailable");

@@ -1,6 +1,101 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { prepareNativeCodexRequest } from "../src/native-network";
 import { forwardNativeCodexRequest } from "../src/native-passthrough";
 import { SUMMARY_PREFIX } from "../src/responses/compaction";
+
+
+const ROUTING_ENV_KEYS = [
+  "CODEX_CHATGPT_WEB_NATIVE_UPSTREAM",
+  "CODEX_CHATGPT_WEB_NATIVE_API_KEY",
+  "CODEX_CHATGPT_WEB_MUSE_UPSTREAM",
+  "CODEX_CHATGPT_WEB_MUSE_API_KEY",
+] as const;
+
+const originalRoutingEnv = Object.fromEntries(
+  ROUTING_ENV_KEYS.map(key => [key, process.env[key]]),
+) as Record<string, string | undefined>;
+
+afterEach(() => {
+  for (const key of ROUTING_ENV_KEYS) {
+    const value = originalRoutingEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
+function zstdNativeRequest(model: string): { request: Request; encoded: ArrayBuffer } {
+  const compressed = Bun.zstdCompressSync(Buffer.from(JSON.stringify({ model, input: "hello", stream: true })));
+  const encoded = new ArrayBuffer(compressed.byteLength);
+  new Uint8Array(encoded).set(compressed);
+  return {
+    encoded,
+    request: new Request("http://127.0.0.1:17841/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer chatgpt-oauth",
+        "content-type": "application/json",
+        "content-encoding": "zstd",
+      },
+      body: encoded,
+    }),
+  };
+}
+
+function recursiveGmailNamespace(): Record<string, unknown> {
+  return {
+    type: "namespace",
+    name: "mcp__codex_apps__gmail",
+    description: "Gmail tools",
+    tools: [{
+      name: "_send_email",
+      description: "Send an email",
+      inputSchema: {
+        type: "object",
+        $defs: {
+          GmailMessagePartRequest: {
+            type: "object",
+            properties: {
+              parts: {
+                type: "array",
+                items: { $ref: "#/$defs/GmailMessagePartRequest" },
+              },
+            },
+          },
+        },
+        properties: {
+          body: { $ref: "#/$defs/GmailMessagePartRequest" },
+        },
+      },
+    }],
+  };
+}
+
+function multimodalWebSearchTool(): Record<string, unknown> {
+  return {
+    type: "web_search",
+    search_context_size: "medium",
+    search_content_types: ["text", "image"],
+    user_location: { type: "approximate", country: "CH", city: "Zurich" },
+  };
+}
+
+function encodedNativeRequest(body: Record<string, unknown>): { request: Request; encoded: ArrayBuffer } {
+  const compressed = Bun.zstdCompressSync(Buffer.from(JSON.stringify(body)));
+  const encoded = new ArrayBuffer(compressed.byteLength);
+  new Uint8Array(encoded).set(compressed);
+  return {
+    encoded,
+    request: new Request("http://127.0.0.1:17841/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer chatgpt-oauth",
+        "content-type": "application/json",
+        "content-encoding": "zstd",
+      },
+      body: encoded,
+    }),
+  };
+}
 
 test("forwards native Codex requests verbatim to the official backend", async () => {
   const originalBody = Bun.zstdCompressSync(Buffer.from('{"model":"gpt-5.6-sol","stream":true}'));
@@ -37,6 +132,214 @@ test("forwards native Codex requests verbatim to the official backend", async ()
   expect(response.headers.get("content-type")).toContain("text/event-stream");
   expect(response.headers.get("connection")).toBeNull();
   expect(await response.text()).toBe("data: native\n\n");
+});
+
+
+test("fails closed for zstd-compressed Muse requests when the Muse upstream is absent", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  delete process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM;
+  delete process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY;
+
+  const { request } = zstdNativeRequest("muse-spark-1.3");
+
+  await expect(forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    await prepareNativeCodexRequest(input, "auto", modelHint);
+    return new Response("unexpected");
+  })).rejects.toThrow("Muse native routing requires CODEX_CHATGPT_WEB_MUSE_UPSTREAM");
+});
+
+test("routes zstd-compressed Muse requests to CLIProxyAPI and preserves encoded bytes", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const { request, encoded } = zstdNativeRequest("muse-spark-1.3");
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.url).toBe("http://127.0.0.1:8317/v1/responses");
+  expect(routed!.headers.get("authorization")).toBe("Bearer muse-proxy-key");
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
+});
+
+test("removes only the Gmail namespace from zstd-compressed Muse Responses requests", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const preservedFunction = {
+    type: "function",
+    name: "exec_command",
+    description: "Run a command",
+    parameters: { type: "object", properties: { cmd: { type: "string" } } },
+  };
+  const preservedNamespace = {
+    type: "namespace",
+    name: "mcp__codex_apps__calendar",
+    description: "Calendar tools",
+    tools: [{ name: "list_events", inputSchema: { type: "object", properties: {} } }],
+  };
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [preservedFunction, recursiveGmailNamespace(), preservedNamespace],
+  };
+  const { request } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.url).toBe("http://127.0.0.1:8317/v1/responses");
+  expect(routed!.headers.get("authorization")).toBe("Bearer muse-proxy-key");
+  expect(routed!.headers.get("content-encoding")).toBeNull();
+  const forwarded = await routed!.json() as Record<string, unknown>;
+  expect(forwarded.model).toBe(body.model);
+  expect(forwarded.input).toBe(body.input);
+  expect(forwarded.stream).toBe(true);
+  expect(forwarded.tools).toEqual([preservedFunction, preservedNamespace]);
+});
+
+test("removes only search_content_types from Muse web_search and composes with Gmail omission", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const preservedFunction = {
+    type: "function",
+    name: "exec_command",
+    description: "Run a command",
+    parameters: { type: "object", properties: { cmd: { type: "string" } } },
+  };
+  const preservedNamespace = {
+    type: "namespace",
+    name: "mcp__codex_apps__calendar",
+    description: "Calendar tools",
+    tools: [{ name: "list_events", inputSchema: { type: "object", properties: {} } }],
+  };
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [
+      preservedFunction,
+      multimodalWebSearchTool(),
+      recursiveGmailNamespace(),
+      preservedNamespace,
+    ],
+  };
+  const { request } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBeNull();
+  const forwarded = await routed!.json() as { tools: unknown[] };
+  expect(forwarded.tools).toEqual([
+    preservedFunction,
+    {
+      type: "web_search",
+      search_context_size: "medium",
+      user_location: { type: "approximate", country: "CH", city: "Zurich" },
+    },
+    preservedNamespace,
+  ]);
+});
+
+test("does not rewrite web_search_preview on Muse when no compatibility rewrite is needed", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [{
+      type: "web_search_preview",
+      search_context_size: "medium",
+      search_content_types: ["text", "image"],
+    }],
+  };
+  const { request, encoded } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
+});
+
+test("keeps Gmail and web-search shape byte-for-byte on ordinary native zstd Responses requests", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const body = {
+    model: "gpt-5.6-sol",
+    input: "hello",
+    stream: true,
+    tools: [recursiveGmailNamespace(), multimodalWebSearchTool()],
+  };
+  const { request, encoded } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("gpt-5.6-sol");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.url).toBe("http://127.0.0.1:2455/backend-api/codex/responses");
+  expect(routed!.headers.get("authorization")).toBe("Bearer codex-lb-key");
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
+});
+
+test("keeps zstd-compressed ordinary native requests on Codex-LB", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const { request, encoded } = zstdNativeRequest("gpt-5.6-sol");
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("gpt-5.6-sol");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.url).toBe("http://127.0.0.1:2455/backend-api/codex/responses");
+  expect(routed!.headers.get("authorization")).toBe("Bearer codex-lb-key");
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
 });
 
 test("forwards native Codex compaction requests to the official compact endpoint", async () => {

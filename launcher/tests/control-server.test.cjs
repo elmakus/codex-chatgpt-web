@@ -117,6 +117,10 @@ test("native proxy resolution requires owner auth, restricts targets, and works 
     getBrowserHost: () => { throw new Error("proxy resolution must not inspect browser contents"); },
     getPreferences: () => { throw new Error("proxy resolution must not depend on integration mode"); },
     resolveProxy: async url => { resolved.push(url); return "PROXY 127.0.0.1:7897"; },
+    proxyResolutionBases: [
+      "http://127.0.0.1:2455/backend-api/codex",
+      "http://127.0.0.1:8317/v1/",
+    ],
   }).start();
   const { endpoint, token } = server.descriptor();
   const send = (url, authorization = `Bearer ${token}`) => fetch(`${endpoint}/v1/network/resolve-proxy`, {
@@ -124,14 +128,26 @@ test("native proxy resolution requires owner auth, restricts targets, and works 
   });
   try {
     const url = "https://chatgpt.com/backend-api/codex/models?client_version=0.153.4";
+    const nativeUpstream = "http://127.0.0.1:2455/backend-api/codex/responses?foo=bar";
+    const museUpstream = "http://127.0.0.1:8317/v1/models";
     assert.equal((await send(url, "Bearer wrong")).status, 401);
-    for (const target of ["http://chatgpt.com/backend-api/codex/models", "https://example.com/", "https://secret@chatgpt.com/backend-api/codex/models", "https://chatgpt.com/backend-api/me"]) {
+    for (const target of [
+      "http://chatgpt.com/backend-api/codex/models",
+      "https://example.com/",
+      "https://secret@chatgpt.com/backend-api/codex/models",
+      "https://chatgpt.com/backend-api/me",
+      "http://127.0.0.1:2455/backend-api/other",
+      "http://127.0.0.1:2455/backend-api/codex-evil/responses",
+      "http://127.0.0.1:8317/v2/models",
+    ]) {
       assert.equal((await send(target)).status, 400);
     }
-    const response = await send(url);
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { proxy: "PROXY 127.0.0.1:7897" });
-    assert.deepEqual(resolved, [url]);
+    for (const target of [url, nativeUpstream, museUpstream]) {
+      const response = await send(target);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { proxy: "PROXY 127.0.0.1:7897" });
+    }
+    assert.deepEqual(resolved, [url, nativeUpstream, museUpstream]);
     server.resolveProxy = async () => { throw new Error("private PAC address"); };
     const failure = await send(url);
     assert.equal(failure.status, 400);

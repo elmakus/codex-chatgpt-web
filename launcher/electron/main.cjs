@@ -1110,6 +1110,10 @@ async function start() {
     getPreferences: () => syncFreshConversationPreference(stateStore, runtimeHost.runtimeConfigSnapshot().config),
     resolveProxy: url => session.fromPartition(LAUNCHER_PROFILE.browserPartition).resolveProxy(url),
     limits: limitsController,
+    proxyResolutionBases: [
+      process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM,
+      process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM,
+    ],
   }).start();
   runtimeSupervisor = new RuntimeSupervisor({
     app,
