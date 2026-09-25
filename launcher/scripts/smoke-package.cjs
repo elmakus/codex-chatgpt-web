@@ -95,6 +95,21 @@ try {
     run(path.join(launcherRoot, "scripts", "smoke-linux-appimage-symbols.sh"), [executable], {
       timeout: 120_000,
     });
+    const extracted = path.join(scratch, "linux-appimage-extract");
+    fs.mkdirSync(extracted);
+    run(executable, ["--appimage-extract"], { cwd: extracted, timeout: 120_000 });
+    const packagedAssets = path.join(
+      extracted,
+      "squashfs-root",
+      "resources",
+      "app.asar.unpacked",
+      "assets",
+    );
+    for (const requiredAsset of ["linux-appimage-runner.sh", "set-codex-lb-key.sh"]) {
+      if (!fs.existsSync(path.join(packagedAssets, requiredAsset))) {
+        throw new Error(`Packaged Linux AppImage is missing required asset: ${requiredAsset}`);
+      }
+    }
     command = "xvfb-run";
     args = ["-a", executable, "--launcher-smoke-test"];
     env.APPIMAGE_EXTRACT_AND_RUN = "1";
