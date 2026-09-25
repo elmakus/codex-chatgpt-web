@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { prepareNativeCodexRequest } from "../src/native-network";
 import { forwardNativeCodexRequest } from "../src/native-passthrough";
+import { SUMMARY_PREFIX } from "../src/responses/compaction";
 
 
 const ROUTING_ENV_KEYS = [
@@ -66,6 +67,15 @@ function recursiveGmailNamespace(): Record<string, unknown> {
         },
       },
     }],
+  };
+}
+
+function multimodalWebSearchTool(): Record<string, unknown> {
+  return {
+    type: "web_search",
+    search_context_size: "medium",
+    search_content_types: ["text", "image"],
+    user_location: { type: "approximate", country: "CH", city: "Zurich" },
   };
 }
 
@@ -204,7 +214,87 @@ test("removes only the Gmail namespace from zstd-compressed Muse Responses reque
   expect(forwarded.tools).toEqual([preservedFunction, preservedNamespace]);
 });
 
-test("keeps the Gmail namespace byte-for-byte on ordinary native zstd Responses requests", async () => {
+test("removes only search_content_types from Muse web_search and composes with Gmail omission", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const preservedFunction = {
+    type: "function",
+    name: "exec_command",
+    description: "Run a command",
+    parameters: { type: "object", properties: { cmd: { type: "string" } } },
+  };
+  const preservedNamespace = {
+    type: "namespace",
+    name: "mcp__codex_apps__calendar",
+    description: "Calendar tools",
+    tools: [{ name: "list_events", inputSchema: { type: "object", properties: {} } }],
+  };
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [
+      preservedFunction,
+      multimodalWebSearchTool(),
+      recursiveGmailNamespace(),
+      preservedNamespace,
+    ],
+  };
+  const { request } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBeNull();
+  const forwarded = await routed!.json() as { tools: unknown[] };
+  expect(forwarded.tools).toEqual([
+    preservedFunction,
+    {
+      type: "web_search",
+      search_context_size: "medium",
+      user_location: { type: "approximate", country: "CH", city: "Zurich" },
+    },
+    preservedNamespace,
+  ]);
+});
+
+test("does not rewrite web_search_preview on Muse when no compatibility rewrite is needed", async () => {
+  process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
+  process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
+  process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
+  process.env.CODEX_CHATGPT_WEB_MUSE_API_KEY = "muse-proxy-key";
+
+  const body = {
+    model: "muse-spark-1.3",
+    input: "hello",
+    stream: true,
+    tools: [{
+      type: "web_search_preview",
+      search_context_size: "medium",
+      search_content_types: ["text", "image"],
+    }],
+  };
+  const { request, encoded } = encodedNativeRequest(body);
+  let routed: Request | undefined;
+
+  await forwardNativeCodexRequest(request, "responses", async (input, modelHint) => {
+    expect(modelHint).toBe("muse-spark-1.3");
+    routed = await prepareNativeCodexRequest(input, "auto", modelHint);
+    return Response.json({ ok: true });
+  });
+
+  expect(routed!.headers.get("content-encoding")).toBe("zstd");
+  expect(Buffer.from(await routed!.arrayBuffer())).toEqual(Buffer.from(encoded));
+});
+
+test("keeps Gmail and web-search shape byte-for-byte on ordinary native zstd Responses requests", async () => {
   process.env.CODEX_CHATGPT_WEB_NATIVE_UPSTREAM = "http://127.0.0.1:2455/backend-api/codex";
   process.env.CODEX_CHATGPT_WEB_NATIVE_API_KEY = "codex-lb-key";
   process.env.CODEX_CHATGPT_WEB_MUSE_UPSTREAM = "http://127.0.0.1:8317/v1";
@@ -214,7 +304,7 @@ test("keeps the Gmail namespace byte-for-byte on ordinary native zstd Responses 
     model: "gpt-5.6-sol",
     input: "hello",
     stream: true,
-    tools: [recursiveGmailNamespace()],
+    tools: [recursiveGmailNamespace(), multimodalWebSearchTool()],
   };
   const { request, encoded } = encodedNativeRequest(body);
   let routed: Request | undefined;
@@ -420,63 +510,61 @@ test("removes ChatGPT Web item identities before native Codex compaction", async
   expect(forwarded.input.at(-1)).toEqual({ type: "compaction_trigger" });
 });
 
-test("converts ChatGPT Web compaction checkpoints before switching back to native Codex", async () => {
-  const summary = "Keep the verified repository state and continue from the failing test.";
-  const body = {
-    model: "gpt-5.6-sol",
-    previous_response_id: "resp_local_web_compaction",
-    input: [
-      {
-        type: "compaction",
-        id: "cmp_11111111111111111111111111111111",
-        encrypted_content: `ocx1:${Buffer.from(summary, "utf8").toString("base64")}`,
-      },
-      {
-        type: "compaction",
-        id: "cmp_22222222222222222222222222222222",
-        encrypted_content: "gAAAAABnative-opaque-compaction",
-      },
-      {
-        type: "message",
-        id: "msg_33333333333333333333333333333333",
-        role: "user",
-        content: [{ type: "input_text", text: "Continue with native Sol." }],
-      },
-    ],
-  };
-  const request = new Request("http://127.0.0.1:17841/v1/responses", {
-    method: "POST",
-    headers: {
-      authorization: "Bearer codex-oauth-token",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  let upstreamRequest: Request | undefined;
-  await forwardNativeCodexRequest(request, "responses", async input => {
-    upstreamRequest = input;
-    return new Response("data: native\n\n", { headers: { "content-type": "text/event-stream" } });
-  }, body);
-
-  const forwarded = await upstreamRequest!.json() as {
-    previous_response_id?: string;
-    input: Array<Record<string, unknown>>;
-  };
-  expect(forwarded).not.toHaveProperty("previous_response_id");
-  expect(forwarded.input.every(item => !("id" in item))).toBe(true);
-  expect(forwarded.input[0]).toMatchObject({
-    type: "message",
-    role: "user",
-    content: [{
-      type: "input_text",
-      text: expect.stringContaining(summary),
-    }],
-  });
-  expect(forwarded.input[1]).toEqual({
-    type: "compaction",
-    encrypted_content: "gAAAAABnative-opaque-compaction",
-  });
-  expect(JSON.stringify(forwarded)).not.toContain("ocx1:");
+test("converts mixed Web history across native turns and both compaction protocols", async () => {
+  const summary = "Checkpoint: 東京 / résumé.\nKeep trailing whitespace. ";
+  for (const mode of ["turn", "compact-v1", "compact-v2"] as const) {
+    for (const encoding of ["identity", "zstd"] as const) {
+      const endpoint = mode === "compact-v1" ? "responses/compact" : "responses";
+      const nativeCompaction = { type: "compaction", encrypted_content: "native-opaque-compaction" };
+      const nativeReasoning = { type: "reasoning", summary: [], encrypted_content: "native-opaque-reasoning" };
+      const call = { type: "function_call", call_id: "call_preserved", name: "read_file", arguments: "{}" };
+      const result = { type: "function_call_output", call_id: call.call_id, output: "file contents" };
+      const message = { type: "message", role: "user", content: [{ type: "input_text", text: "Continue." }] };
+      const tail = mode === "compact-v2" ? [{ type: "compaction_trigger" }] : [];
+      const body = {
+        model: "gpt-5.6-sol",
+        previous_response_id: "resp_local_web_compaction",
+        input: [
+          { type: "compaction", id: "cmp_web", encrypted_content: `ocx1:${Buffer.from(summary).toString("base64")}` },
+          { type: "reasoning", id: "rs_web", summary: [], encrypted_content: "ocxr1:eyJ0eHQiOiJoaWRkZW4ifQ==" },
+          { ...nativeCompaction, id: "cmp_native" },
+          { ...nativeReasoning, id: "rs_native" },
+          { ...call, id: "fc_web" }, result, { ...message, id: "msg_web" }, ...tail,
+        ],
+      };
+      const original = JSON.stringify(body);
+      const bytes = encoding === "zstd" ? Bun.zstdCompressSync(Buffer.from(original)) : Buffer.from(original);
+      const wireBody = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(wireBody).set(bytes);
+      const request = new Request(`http://127.0.0.1:17841/v1/${endpoint}`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer synthetic-test-token", "content-type": "application/json",
+          "content-encoding": encoding, "content-length": String(bytes.byteLength),
+        },
+        body: wireBody,
+      });
+      let calls = 0;
+      await forwardNativeCodexRequest(request, endpoint, async forwarded => {
+        calls += 1;
+        expect(forwarded.url).toBe(`https://chatgpt.com/backend-api/codex/${endpoint}`);
+        expect(forwarded.headers.get("content-encoding")).toBeNull();
+        expect(forwarded.headers.get("content-length")).toBeNull();
+        expect(await forwarded.json()).toEqual({
+          model: body.model,
+          input: [
+            { type: "message", role: "user", content: [{
+              type: "input_text", text: `${SUMMARY_PREFIX}\n\n${summary}`,
+            }] },
+            nativeCompaction, nativeReasoning, call, result, message, ...tail,
+          ],
+        });
+        return new Response("data: native\n\n", { headers: { "content-type": "text/event-stream" } });
+      }, mode === "turn" && encoding === "identity" ? body : undefined);
+      expect(calls).toBe(1);
+      expect(JSON.stringify(body)).toBe(original);
+    }
+  }
 });
 
 test("keeps native encrypted reasoning requests byte-for-byte intact", async () => {
