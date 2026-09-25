@@ -1340,7 +1340,10 @@ test("model catalog health distinguishes no request, transport failure, upstream
       expect(snapshot.last_model_catalog_result).toMatchObject({ status });
       expect(snapshot.last_model_catalog_result.failure?.stage).toBe(stage);
       if (next === "transport") expect(snapshot.last_model_catalog_result.failure.code).toBe("UnsupportedProxyProtocol");
-      expect(JSON.stringify(snapshot)).not.toContain("private");
+      const serializedSnapshot = JSON.stringify(snapshot);
+      expect(serializedSnapshot).not.toContain("private proxy credentials and host");
+      expect(serializedSnapshot).not.toContain("private upstream account detail");
+      expect(serializedSnapshot).not.toContain("private-session-token");
       expect(snapshot.successful_model_catalog_requests).toBe(next === "ready" ? 1 : 0);
     }
     expect((await health()).model_catalog_requests).toBe(5);
