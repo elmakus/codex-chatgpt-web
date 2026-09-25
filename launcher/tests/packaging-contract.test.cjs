@@ -38,7 +38,10 @@ test("launcher publishes native packages for all supported desktop operating sys
   assert.deepEqual(manifest.build.linux.target, ["AppImage"]);
   assert.ok(manifest.build.files.includes("assets/icon.png"));
   assert.ok(manifest.build.files.includes("assets/linux-appimage-runner.sh"));
+  assert.ok(manifest.build.files.includes("assets/set-codex-lb-key.sh"));
   assert.ok(manifest.build.asarUnpack.includes("assets/linux-appimage-runner.sh"));
+  assert.ok(manifest.build.asarUnpack.includes("assets/set-codex-lb-key.sh"));
+  assert.ok(fs.existsSync(path.join(launcherRoot, "assets", "set-codex-lb-key.sh")));
   assert.equal(manifest.build.afterPack, undefined);
   assert.ok(fs.existsSync(path.join(launcherRoot, "assets", "icon.ico")));
   assert.equal(manifest.build.nsis.oneClick, false);
