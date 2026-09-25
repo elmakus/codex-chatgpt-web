@@ -1,6 +1,6 @@
 {
   "name": "codex-web-gpt-launcher",
-  "version": "5.0.16",
+  "version": "6.1.1",
   "private": true,
   "description": "Desktop control center for Codex ChatGPT Web",
   "author": "miuuyy",
@@ -46,8 +46,7 @@
     "artifactName": "codex-web-gpt-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "asarUnpack": [
-      "assets/linux-appimage-runner.sh",
-      "assets/set-codex-lb-key.sh"
+      "assets/linux-appimage-runner.sh"
     ],
     "directories": {
       "output": "release"
@@ -57,7 +56,6 @@
       "electron/**",
       "assets/icon.png",
       "assets/linux-appimage-runner.sh",
-      "assets/set-codex-lb-key.sh",
       "package.json"
     ],
     "extraResources": [

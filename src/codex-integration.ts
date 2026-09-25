@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AppConfig } from "./config";
 import { getConfigPath, loadConfig, saveConfig } from "./config";
-import { installCodexInterruptHook, installCodexInterruptHookCommand } from "./codex-interrupt-hook";
+import {
+  installCodexInterruptHook,
+  installCodexInterruptHookCommand,
+  verifyCodexInterruptHook,
+} from "./codex-interrupt-hook";
 import {
   CODEX_REALTIME_WEBRTC_CALL_BASE_URL,
   getCodexConfigPath,
@@ -37,6 +41,7 @@ import {
   textFormat,
 } from "./codex-integration-document";
 import {
+  assertBuiltinModelProvider,
   assertPreservedPreviousAssignments,
   assertPreservedPreviousRealtimeAssignment,
   installRoute,
@@ -90,6 +95,7 @@ function installConfiguredRoute(
   const hook = "interruptHookCommand" in config
     ? installCodexInterruptHookCommand(configured.text, getCodexConfigPath(), config.interruptHookCommand)
     : installCodexInterruptHook(configured.text, getCodexConfigPath(), config);
+  verifyCodexInterruptHook(hook.text, hook.installed);
   return { ...configured, text: hook.text, interruptHook: hook.installed };
 }
 
@@ -198,7 +204,10 @@ export function preflightCodexIntegration(
       );
       return;
     }
-    if (existing.version === 10) return;
+    if (existing.version === 10) {
+      assertBuiltinModelProvider(currentText);
+      return;
+    }
     const baseline = managedJournalIsActive(existing)
       ? restoreManagedRoute(currentText, existing)
       : currentText;

@@ -8,11 +8,11 @@ editing Codex configuration, or opening a new issue.
 1. Install the [latest release](https://github.com/miuuyy/codex-chatgpt-web/releases/latest). Quit
    **Codex Web GPT** before running the installer again; updating preserves its private ChatGPT
    profile and launcher configuration.
-2. In the launcher, confirm that ChatGPT sign-in, the browser smoke test, and **Install models** (or
-   **Repair Codex setup**) are green.
+2. In **Setup**, confirm that ChatGPT sign-in, the browser smoke test, and **Install into Codex**
+   are green. The installation button says **Install models**, or **Reinstall** after setup.
 3. Fully quit Codex, including its background process, and reopen it. Signing out, closing only the
    window, or starting another task does not reload the model catalog. Keep the launcher open.
-4. Select a **ChatGPT Web — …** model from Codex's model picker.
+4. Select a model ending in **(Web)** from Codex's model picker.
 5. Run **Settings → Run doctor**. If the problem remains, reproduce it once and immediately use
    **Activity → Export safe log**.
 
@@ -27,7 +27,9 @@ still running. The launcher should move from **Restart Codex** to a verified cat
 
 If the models still do not appear:
 
-- run **Repair Codex setup** once;
+- confirm that **Codex itself** uses ChatGPT sign-in; signing into the launcher's browser is separate.
+  An API-key or signed-out Codex session can show only its built-in catalog without contacting the bridge;
+- open **Setup → Install into Codex** and click **Reinstall** once;
 - check **Settings → Run doctor**;
 - make sure another Codex wrapper is not replacing the route; and
 - export a safe log after the failed catalog check.
@@ -44,8 +46,9 @@ for the whole installation or only for the process they launch.
 
 Choose one route owner:
 
-- To use Codex Web GPT, disable the other wrapper's provider/proxy mode, run **Repair Codex setup**,
-  fully restart Codex, and start Codex directly rather than through the wrapper command.
+- To use Codex Web GPT, disable the other wrapper's provider/proxy mode, click
+  **Setup → Install into Codex → Reinstall**, fully restart Codex, and start Codex directly rather
+  than through the wrapper command.
 - A tool may remain enabled only as an MCP integration if it does not replace `openai_base_url`.
 - To switch away cleanly, use **Settings → Remove Codex integration** first. This restores the exact
   route that existed before Codex Web GPT was installed.
@@ -53,6 +56,35 @@ Choose one route owner:
 Do not hand-edit the launcher's route journal. It exists so setup and removal can fail closed instead
 of silently destroying another provider's configuration. First-class external-router composition is
 tracked in [#205](https://github.com/miuuyy/codex-chatgpt-web/issues/205), but is not supported today.
+
+## Native models stop after closing the launcher
+
+While the integration is installed, native Codex models also use the local bridge. Keep the launcher
+running, or use **Settings → Remove Codex integration** before quitting it. Then fully quit Codex,
+including background processes, and reopen it to load the restored route.
+
+CLI users can temporarily restore the previous route with `codex-chatgpt-web route disconnect`.
+Fully restart Codex after a route change. Starting the launcher reconnects an installed integration.
+
+## Codex's usage-limit banner disables Send for Web models
+
+If Codex shows **You're out of Codex and Work usage** and disables Send even with a Web model
+selected, sign out of **Codex** and sign in with another account you own that can send messages.
+A free account with Codex access and no blocking usage banner can be used.
+
+Keep your intended ChatGPT account signed in inside **Codex Web GPT**; these are separate sessions.
+Changing the Codex login does not reset or increase the launcher's ChatGPT Web account limits.
+
+## Encrypted content cannot be verified after switching models
+
+If switching from ChatGPT Web to a native Codex model fails with `Encrypted content could not be
+decrypted or parsed`, check the route owner. The launcher's native route already converts Web
+checkpoints into readable context and preserves native encrypted history. An external router that
+sends native requests directly to OpenAI bypasses that conversion.
+
+Use one route owner as described above. If the error persists through the launcher, export a safe log
+and include both model names and whether compaction preceded the switch. Do not delete checkpoints
+or strip encrypted history; this can lose task context. External-router composition remains unsupported.
 
 ## ChatGPT sign-in does not complete
 
@@ -89,6 +121,13 @@ mean that the ChatGPT UI did not expose a structure the bridge can safely prove.
 Free and Go accounts normally expose Luna and Think without the paid-account effort selector. A
 missing paid selector on those accounts is not itself a sign-in failure.
 
+## Personalization or connector controls are not found
+
+In ChatGPT, open **Settings → General → Language** and choose **English** explicitly, then reload
+ChatGPT inside the launcher and retry once. Some browser controls depend on English labels;
+changing the launcher language does not change the ChatGPT website language.
+The same step applies when a model "could not be selected and verified".
+
 ## Full harness or MCP verification fails
 
 Video walkthroughs:
@@ -112,6 +151,37 @@ After updating, if `codex_exec` still does not expose `sandbox_permissions`, `ju
 `prefix_rule`, recreate the current mode's connector so ChatGPT loads the updated tool schema.
 These fields only forward a permission request to Codex; its sandbox and approval policy still
 decide whether the command can run. Ordinary commands do not require these optional fields.
+
+### Tools disappear on follow-up messages
+
+If local tools work on the first message but disappear on a follow-up, check the same ChatGPT tab
+in **Launcher → Browser**. ChatGPT may not retain the connector for the next message in a reused
+conversation. The model saying it has no tools alone does not establish this.
+
+In 6.0, enable **Settings → New browser chat for each turn** in automatic browser mode for this
+case: the same Codex task continues, but each turn attaches the connector in a
+fresh ChatGPT conversation. It resends more context and can be slower. In stock v5.0.8, close the
+task's **completed** browser tab before sending the next message; closing a running tab cancels it.
+
+Also try recreating **Codex Native2** as a new connector with the same Tunnel and **Allow all
+actions**, then run **Verify runtime**. If tools are already missing in a fresh chat, report that
+separately with a safe log and the browser's actual connector/tool state.
+
+### Windows: `unable to verify the first certificate`
+
+For this error during **Connect harness**, check the affected host with Windows `curl.exe -Iv`
+(for example, `curl.exe -Iv https://api.openai.com/`). If it uses Schannel and receives an HTTP
+response, Windows trusts that connection. Fully quit the launcher, then start it from PowerShell:
+
+```powershell
+$env:NODE_USE_SYSTEM_CA = "1"
+$install = (Get-ItemProperty "HKCU:\Software\d1a6026a-6210-588e-9a2b-da3936f94e02").InstallLocation
+Start-Process (Join-Path $install "Codex Web GPT.exe")
+```
+
+For a portable copy, use its executable path instead. Retry **Connect harness** once. This enables
+[Node's system CA support](https://nodejs.org/api/cli.html#node_use_system_ca1); certificate verification
+stays enabled. If it still fails, export a safe log. Do not set `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
 ### ChatGPT shows `Error creating connector`
 
@@ -176,6 +246,8 @@ max_concurrent_threads_per_session = 1
 ```
 
 If the table already exists, add or change only the key; do not create a second `[agents]` table.
+If it contains `max_threads`, replace that old name with `max_concurrent_threads_per_session`;
+do not keep both. Codex treats them as aliases and may reject the configuration as a duplicate field.
 Bigger Context can make one turn larger and longer, but does not increase safe account concurrency.
 
 ## Images from earlier turns are attached again
@@ -208,8 +280,13 @@ To update, quit **Codex Web GPT** and run the same installer command from the RE
 replaces the application and runtime while preserving the launcher configuration and private
 ChatGPT profile.
 
-To repair a valid installation, use **Repair Codex setup** once and fully restart Codex. Avoid
-deleting configuration until **Run doctor** and a safe log identify which layer failed.
+On Linux, automatic updates require the installed launcher created by `install-launcher.sh`.
+If Update reports that the stable wrapper is missing, quit the app, run the installer command
+from the README, and reopen Codex Web GPT from the applications menu. This preserves settings and browser data.
+
+To repair a valid integration, open **Setup → Install into Codex**, click **Reinstall** once,
+and fully restart Codex. Avoid deleting configuration until **Run doctor** and a safe log identify
+which layer failed.
 
 To remove the integration safely:
 
