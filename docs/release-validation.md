@@ -17,8 +17,7 @@ a newer stable release. Launchers discover it on their next startup update check
 version is newer and its platform asset and checksums are present. Already running launchers
 do not poll for publication changes.
 
-The tag workflow marks new suffixed versions such as `v6.0.0-rc.1` as pre-releases automatically
-and preserves an existing release's pre-release flag when rerun.
+The tag workflow marks ordinary suffixed versions such as `v6.0.0-rc.1` as pre-releases automatically. Canonical downstream-fork lineage tags of the form `vX.Y.Z-private.N` are stable release identities, not prerelease-quality labels; a previously staged release still preserves its explicit pre-release flag when rerun.
 Use a new version for changed binaries; toggling publication flags promotes the existing build.
 Do not publish a stable tag and only mark it as a pre-release afterwards: an older launcher could
 offer it during that interval. To keep a final version out of the updater during testing,

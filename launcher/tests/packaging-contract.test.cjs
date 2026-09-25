@@ -221,6 +221,24 @@ test("CI packages and smoke-launches on macOS, Windows, and Linux", () => {
   assert.doesNotMatch(release, /gh release create[\s\S]*?--draft/);
 });
 
+test("canonical private fork versions remain stable release identities", () => {
+  assert.match(repositoryManifest.version, /^\d+\.\d+\.\d+-private\.[1-9]\d*$/);
+  assert.equal(manifest.version, repositoryManifest.version);
+
+  const release = fs.readFileSync(path.join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
+  assert.ok(release.includes('[[ "$GITHUB_REF_NAME" == *-* ]]'));
+  assert.ok(release.includes('[[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+-private\\.[1-9][0-9]*$ ]]'));
+  assert.match(release, /release_flags=\(--prerelease --latest=false\)/);
+
+  const forkRelease = fs.readFileSync(
+    path.join(repositoryRoot, ".github", "workflows", "fork-linux-release.yml"),
+    "utf8",
+  );
+  assert.ok(forkRelease.includes('expected="v$(jq -r .version package.json)"'));
+  assert.match(forkRelease, /gh release create[\s\S]*--latest/);
+  assert.doesNotMatch(forkRelease, /--prerelease/);
+});
+
 test("Linux AppImage fallback uses one owned extraction and removes it on exit", {
   skip: process.platform !== "linux" ? "AppImage process identity is Linux-specific" : false,
 }, () => {
