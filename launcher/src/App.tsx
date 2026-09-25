@@ -7,11 +7,15 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { copyFor, localizeRuntimeMessage, type Copy } from "./i18n";
 import { Icon, type IconName } from "./icons";
+import { LimitsSurface } from "./LimitsSurface";
+import { limitsCopyFor } from "./limits-copy";
+import { useLimits } from "./useLimits";
 import type {
   BrowserInteractionMode,
   BrowserState,
@@ -367,6 +371,8 @@ function LauncherShell({
   const updateBusy = snapshot.update.status === "downloading" || snapshot.update.status === "installing";
   const updateVersion = "version" in snapshot.update ? snapshot.update.version : null;
   const selectedManualTab = browser?.tabs.find(tab => tab.active && tab.interactionMode === "manual");
+  const limits = useLimits(api!, snapshot.state.browserInteractionMode === "manual");
+  const limitsCopy = limitsCopyFor(language);
 
   useEffect(() => {
     if (snapshot.state.browserInteractionMode === "manual") {
@@ -604,6 +610,17 @@ function LauncherShell({
               </SidebarGroup>
               <SidebarGroup label={copy.runtime}>
                 <SidebarItem active={surface === "activity"} icon="activity" label={copy.activity} onClick={() => navigateSurface("activity")} />
+                <SidebarItem
+                  active={surface === "limits"}
+                  badge={limits.needsAttention ? (
+                    <span role="img" aria-label={limitsCopy.nearLimit} title={limitsCopy.nearLimit}>
+                      <ActionDot tone="optional" />
+                    </span>
+                  ) : null}
+                  icon="logs"
+                  label={limitsCopy.title}
+                  onClick={() => navigateSurface("limits")}
+                />
               </SidebarGroup>
             </nav>
 
@@ -684,6 +701,19 @@ function LauncherShell({
             ) : null}
             {surface === "activity" ? (
               <ActivitySurface copy={copy} language={language} logs={logs} setError={setError} />
+            ) : null}
+            {surface === "limits" ? (
+              <LimitsSurface
+                api={api!}
+                tracker={limits}
+                language={language}
+                manualMode={snapshot.state.browserInteractionMode === "manual"}
+                runtimeBusy={operation?.status === "running"
+                  || browser?.status === "running" || browser?.status === "testing" || browser?.status === "loading"
+                  || browser?.loading === true
+                  || browser?.tabs.some((tab) => tab.status === "running" || tab.status === "testing" || tab.loading) === true}
+                setError={setError}
+              />
             ) : null}
             {surface === "settings" ? (
               <SettingsSurface
@@ -1638,6 +1668,28 @@ function SettingsSurface({
       setBusy(false);
     }
   };
+  const setFreshConversationPerTurn = async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      updateState(await api!.setFreshConversationPerTurn(enabled));
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const setUseSavedChats = async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      updateState(await api!.setUseSavedChats(enabled));
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   const setInteractionMode = async (mode: BrowserInteractionMode) => {
     setBusy(true);
     setError(null);
@@ -1722,6 +1774,21 @@ function SettingsSurface({
             checked={snapshot.state.experimentalSkillAttachments}
             disabled={busy || snapshot.state.browserInteractionMode === "manual" || !snapshot.state.coreSetupComplete}
             onChange={(checked) => void setSkillAttachments(checked)}
+          />
+        </SettingRow>
+        <SettingRow body={snapshot.state.browserInteractionMode === "manual"
+          ? copy.manualFreshConversationUnavailable : copy.freshConversationBody} label={copy.freshConversation}>
+          <Switch
+            checked={snapshot.state.experimentalFreshConversationPerTurn}
+            disabled={busy || snapshot.state.browserInteractionMode === "manual" || snapshot.state.coreSetupComplete !== true}
+            onChange={(checked) => void setFreshConversationPerTurn(checked)}
+          />
+        </SettingRow>
+        <SettingRow body={copy.savedChatsBody} label={copy.savedChats}>
+          <Switch
+            checked={snapshot.state.useSavedChats}
+            disabled={busy || snapshot.state.coreSetupComplete !== true}
+            onChange={(checked) => void setUseSavedChats(checked)}
           />
         </SettingRow>
         <SettingRow body={copy.chooseLanguageHint} label={copy.language}>
@@ -1956,9 +2023,31 @@ function ZeroRiskModelMenu({
 
 function TutorialVideo({ copy, label, src }: { copy: Copy; label: string; src: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [paused, setPaused] = useState(false);
   const inlineVideo = useRef<HTMLVideoElement>(null);
   const expandedVideo = useRef<HTMLVideoElement>(null);
   const expandedAt = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const active = expanded ? expandedVideo.current : inlineVideo.current;
+    if (expanded) inlineVideo.current?.pause();
+    if (paused) active?.pause();
+    else if (active) void active.play().catch(() => { if (!cancelled) setPaused(true); });
+    return () => { cancelled = true; };
+  }, [expanded, paused]);
+
+  const playbackControl = {
+    "aria-label": `${label}: ${paused ? copy.playGuideVideo : copy.pauseGuideVideo}`,
+    role: "button",
+    tabIndex: 0,
+    onClick: () => setPaused(value => !value),
+    onKeyDown: (event: ReactKeyboardEvent<HTMLVideoElement>) => {
+      if (event.repeat || (event.key !== " " && event.key !== "Enter")) return;
+      event.preventDefault();
+      setPaused(value => !value);
+    },
+  };
 
   const closeExpanded = () => {
     const currentTime = expandedVideo.current?.currentTime;
@@ -1980,7 +2069,10 @@ function TutorialVideo({ copy, label, src }: { copy: Copy; label: string; src: s
   return (
     <>
       <div className="guide-media">
-        <video aria-label={label} autoPlay loop muted playsInline ref={inlineVideo} src={src} />
+        <video {...playbackControl} autoPlay={!paused && !expanded} loop muted playsInline ref={inlineVideo} src={src} />
+        <span aria-hidden="true" className={`guide-media-pause${paused ? " is-visible" : ""}`}>
+          <Icon name="pause" />
+        </span>
         <button
           aria-label={copy.expandGuideVideo}
           className="guide-media-expand"
@@ -2001,8 +2093,8 @@ function TutorialVideo({ copy, label, src }: { copy: Copy; label: string; src: s
           role="dialog"
         >
           <video
-            aria-label={label}
-            autoPlay
+            {...playbackControl}
+            autoPlay={!paused}
             loop
             muted
             onLoadedMetadata={(event) => {
@@ -2012,6 +2104,9 @@ function TutorialVideo({ copy, label, src }: { copy: Copy; label: string; src: s
             ref={expandedVideo}
             src={src}
           />
+          <span aria-hidden="true" className={`guide-media-pause${paused ? " is-visible" : ""}`}>
+            <Icon name="pause" />
+          </span>
           <button
             aria-label={copy.closeGuideVideo}
             autoFocus

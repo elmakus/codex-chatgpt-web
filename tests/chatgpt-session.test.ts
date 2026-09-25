@@ -6,8 +6,32 @@ import {
   CHATGPT_EFFORT_MENU_SELECTOR,
   CHATGPT_EFFORT_SLIDER_CONTAINER_SELECTOR,
   activateChatGptEffortMenu,
+  assertNewChatPage,
+  chatGptNewChatUrl,
   detectChatGptAccountCapabilities,
 } from "../src/chatgpt-session";
+
+test("saved chats start empty and cannot reuse an arbitrary conversation or a Temporary Chat", async () => {
+  expect(chatGptNewChatUrl()).toBe("https://chatgpt.com/?temporary-chat=true");
+  expect(chatGptNewChatUrl(true)).toBe("https://chatgpt.com/");
+  const prepare = (ChatGptBrowserWorker.prototype as any).prepareChatSurface;
+  for (const saved of [false, true]) {
+    let url = "https://chatgpt.com/c/previous-task";
+    const navigations: string[] = [];
+    const absent: any = { filter: () => absent, last: () => absent, isVisible: async () => false };
+    const composer: any = { count: async () => 1, nth: () => composer, isVisible: async () => true };
+    const page: any = {
+      url: () => url,
+      goto: async (next: string) => { url = next; navigations.push(next); },
+      locator: (selector: string) => selector === CHATGPT_COMPOSER_SELECTOR ? composer : absent,
+    };
+    expect(await prepare.call({ activeComposer: async () => composer }, page, undefined, saved)).toBe(composer);
+    expect(navigations).toEqual([chatGptNewChatUrl(saved)]);
+    await expect(assertNewChatPage(page, !saved)).rejects.toThrow("requested new");
+    url = "https://chatgpt.com/c/previous-task";
+    await expect(assertNewChatPage(page, saved)).rejects.toThrow("requested new");
+  }
+});
 
 test("composer and effort selectors exclude unrelated editable fields and menu buttons", () => {
   const { createDocument } = require("@mixmark-io/domino") as { createDocument(html: string): Document };
@@ -20,10 +44,15 @@ test("composer and effort selectors exclude unrelated editable fields and menu b
     <div contenteditable="true" data-lexical-editor="true" id="composer-lexical"></div>
     <button aria-haspopup="menu" data-tone="neutral" id="effort"></button>
     <button aria-haspopup="menu" data-testid="model-switcher-dropdown-button" id="model"></button>
+  </form>
+  <div contenteditable="true" data-composer-markdown role="textbox" id="unowned-power-editor"></div>
+  <form data-chatgpt-composer>
+    <div contenteditable="true" data-composer-markdown role="textbox" id="power-editor"></div>
+    <button data-codex-intelligence-trigger="true" data-composer-navigation-target="reasoning" aria-haspopup="menu" id="power-effort"></button>
   </form></body>`);
   const matches = (selector: string) => Array.from(document.querySelectorAll(selector)).map(element => element.id);
-  expect(matches(CHATGPT_COMPOSER_SELECTOR)).toEqual(["composer-testid", "prompt-textarea", "composer-lexical"]);
-  expect(matches(CHATGPT_EFFORT_CONTROL_SELECTOR)).toEqual(["effort", "model"]);
+  expect(matches(CHATGPT_COMPOSER_SELECTOR)).toEqual(["composer-testid", "prompt-textarea", "composer-lexical", "power-editor"]);
+  expect(matches(CHATGPT_EFFORT_CONTROL_SELECTOR)).toEqual(["effort", "model", "power-effort"]);
 });
 
 test("effort activation binds the owned menu after the control opens", async () => {
@@ -155,6 +184,7 @@ test("effort activation fails closed when neither event exposes a structural sur
 
 test("a complete authenticated composer with no effort selector is Luna-only", async () => {
   const effortButton = {
+    filter() { return this; },
     last() { return this; },
     isVisible: async () => false,
   };
@@ -183,6 +213,7 @@ test("a complete authenticated composer with no effort selector is Luna-only", a
 test("a transient effort control does not turn a Luna-only account into Sol", async () => {
   let visibilityReads = 0;
   const effortButton = {
+    filter() { return this; },
     last() { return this; },
     isVisible: async () => {
       visibilityReads += 1;
@@ -211,8 +242,9 @@ test("a transient effort control does not turn a Luna-only account into Sol", as
   expect(visibilityReads).toBe(2);
 });
 
-function reasoningPicker(options: { max?: string; delay?: number; missing?: boolean } = {}) {
+function reasoningPicker(options: { max?: string; locks?: Array<string | null>; delay?: number; missing?: boolean; loseSelectionOnClose?: boolean; power?: boolean; disabled?: string } = {}) {
   let value = 0;
+  let opened = true;
   const keys: string[] = [];
   const hidden = {
     filter() { return this; }, last() { return this; }, getByText() { return this; },
@@ -232,6 +264,18 @@ function reasoningPicker(options: { max?: string; delay?: number; missing?: bool
   const container = {
     filter() { return this; }, last() { return this; },
     locator: () => slider,
+    evaluate: async (read: (element: Element) => unknown) => {
+      const { createDocument } = require("@mixmark-io/domino") as { createDocument(html: string): Document };
+      // Captured Plus DOM: the slider root and each tick have data-locked, but only
+      // ticks have data-selected. Its fourth position is a locked Pro upsell.
+      const locks = options.locks ?? Array.from({ length: Number(options.max ?? "4") + 1 }, () => "false");
+      const attribute = options.power ? "data-model-picker-power-slider" : "data-model-reasoning-effort-slider";
+      const document = createDocument(`<div ${attribute}>
+        <span data-locked="false" data-orientation="horizontal" aria-disabled="${options.disabled ?? "false"}"><span>${locks.map((lock, index) =>
+          `<span data-selected="${index <= value}"${lock === null ? "" : ` data-locked="${lock}"`}></span>`).join("")}
+        </span></span></div>`);
+      return read(document.querySelector(`[${attribute}]`)!);
+    },
     isVisible: async () => true,
     waitFor: async ({ state }: { state: string }) => {
       expect(state).toBe("visible");
@@ -240,20 +284,27 @@ function reasoningPicker(options: { max?: string; delay?: number; missing?: bool
     },
   };
   const control = {
-    last() { return this; }, waitFor: async () => {}, isVisible: async () => true,
-    getAttribute: async (name: string) => name === "aria-expanded" ? "true" : null,
+    first() { return this; }, filter() { return this; }, last() { return this; },
+    count: async () => 1, waitFor: async () => {}, isVisible: async () => true,
+    click: async () => { opened = true; },
+    innerText: async () => opened ? "Thinking effort" : ["Instant", "Medium", "High", "Extra High", "Pro"][value]!,
+    getAttribute: async (name: string) => name === "aria-expanded" ? String(opened) : null,
   };
-  const composer = { filter() { return this; }, last() { return this; }, locator: () => ({ locator: () => control }) };
+  const composer = { filter() { return this; }, last() { return this; }, isEditable: async () => true, locator: () => ({ locator: () => control }) };
   const modelRows = { count: async () => 3, first() { return this; }, waitFor: async () => {}, nth: () => { throw new Error("Model rows are not effort choices"); } };
   const menu = { filter() { return this; }, last() { return this; }, isVisible: async () => true, locator: () => modelRows };
   const page = {
+    url: () => "https://chatgpt.com/?temporary-chat=true",
     locator: (selector: string) => {
       if (selector === CHATGPT_COMPOSER_SELECTOR) return composer;
       if (selector === CHATGPT_EFFORT_MENU_SELECTOR) return menu;
       if (selector === CHATGPT_EFFORT_SLIDER_CONTAINER_SELECTOR) return container;
       return hidden;
     },
-    keyboard: { press: async () => {} },
+    keyboard: { press: async () => {
+      opened = false;
+      if (options.loseSelectionOnClose) value = 0;
+    } },
   };
   return { page, composer, keys, value: () => value };
 }
@@ -278,12 +329,62 @@ test("the four-step browser range keeps Extra High available when Pro is unavail
     .resolves.toEqual({ solAvailable: true, extraHighAvailable: true, proAvailable: false });
 });
 
-test("Pro selection changes the hidden slider through its visible owner, never through model rows", async () => {
-  const fixture = reasoningPicker({ delay: 50 });
-  const select = (ChatGptBrowserWorker.prototype as unknown as {
-    selectModelAndEffort(...args: unknown[]): Promise<unknown>;
-  }).selectModelAndEffort;
-  await select.call({ activeComposer: async () => fixture.composer }, fixture.page, "gpt-5.6-sol", "max", { localToolsEnabled: false, solAvailable: true, extraHighAvailable: true, proAvailable: true });
-  expect(fixture.keys).toEqual(["ArrowRight", "ArrowRight", "ArrowRight", "ArrowRight"]);
-  expect(fixture.value()).toBe(4);
+test("capabilities exclude the observed locked Plus upsell and reject unknown lock state", async () => {
+  await expect(detectChatGptAccountCapabilities(reasoningPicker({
+    max: "3", locks: ["false", "false", "false", "true"],
+  }).page as never)).resolves.toEqual({ solAvailable: true, extraHighAvailable: false, proAvailable: false });
+  await expect(detectChatGptAccountCapabilities(reasoningPicker({
+    locks: ["false", "false", "false", "false", "true"],
+  }).page as never)).resolves.toEqual({ solAvailable: true, extraHighAvailable: true, proAvailable: false });
+  for (const locks of [[], ["false", "false", "false", null], ["false", "false", "false", "unknown"]]) {
+    await expect(detectChatGptAccountCapabilities(reasoningPicker({ max: "3", locks }).page as never))
+      .rejects.toThrow("availability");
+  }
+});
+
+test("power picker omission of lock attributes requires its enabled structural owner and complete ticks", async () => {
+  await expect(detectChatGptAccountCapabilities(reasoningPicker({ power: true, locks: Array(5).fill(null) }).page as never))
+    .resolves.toEqual({ solAvailable: true, extraHighAvailable: true, proAvailable: true });
+  await expect(detectChatGptAccountCapabilities(reasoningPicker({ power: true, locks: [null, null, null, "true", "true"] }).page as never))
+    .resolves.toEqual({ solAvailable: true, extraHighAvailable: false, proAvailable: false });
+  for (const options of [
+    { power: false }, { power: true, disabled: "true" }, { power: true, disabled: "unknown" },
+    { power: true, max: "3" },
+  ]) await expect(detectChatGptAccountCapabilities(reasoningPicker({ ...options, locks: Array(5).fill(null) }).page as never))
+    .rejects.toThrow("availability");
+});
+
+test("stale saved capabilities cannot activate a locked effort; High remains selectable", async () => {
+  for (const effort of ["xhigh", "high"] as const) {
+    const fixture = reasoningPicker({ max: "3", locks: ["false", "false", "false", "true"] });
+    const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
+      activeComposer: async () => fixture.composer,
+    }) as { selectModelAndEffort(...args: unknown[]): Promise<{ selection: { label: string } }> };
+    const selection = worker.selectModelAndEffort(fixture.page, "gpt-5.6-sol", effort, {
+      localToolsEnabled: false, solAvailable: true, extraHighAvailable: true, proAvailable: true,
+    });
+    if (effort === "xhigh") {
+      await expect(selection).rejects.toMatchObject({ code: "chatgpt_effort_locked", retryable: false });
+      expect(fixture.keys).toEqual([]);
+    } else {
+      expect((await selection).selection.label).toBe("High");
+      expect(fixture.keys).toEqual(["ArrowRight", "ArrowRight"]);
+    }
+  }
+});
+
+test("Pro selection verifies the persisted hidden slider through its visible owner, never model rows", async () => {
+  for (const loseSelectionOnClose of [false, true]) {
+    const fixture = reasoningPicker({ delay: 50, loseSelectionOnClose });
+    const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
+      activeComposer: async () => fixture.composer,
+    }) as { selectModelAndEffort(...args: unknown[]): Promise<{ selection: { label: string } }> };
+    const selection = worker.selectModelAndEffort(fixture.page, "gpt-5.6-sol", "max", {
+      localToolsEnabled: false, solAvailable: true, extraHighAvailable: true, proAvailable: true,
+    });
+    if (loseSelectionOnClose) await expect(selection).rejects.toMatchObject({ retryable: false });
+    else expect((await selection).selection.label).toBe("Pro");
+    expect(fixture.keys).toEqual(["ArrowRight", "ArrowRight", "ArrowRight", "ArrowRight"]);
+    expect(fixture.value()).toBe(loseSelectionOnClose ? 0 : 4);
+  }
 });
